@@ -1,0 +1,151 @@
+{
+  "manifest_version": 1,
+  "plugin_id": "chat.rim.k8s-pods",
+  "display_name": "Kubernetes Pods",
+  "version": "0.1.0",
+  "description": "Lists the pods of a Kubernetes namespace with status, restarts and age, and restarts a pod after you confirm. It runs kubectl on this device with your own kubeconfig: your cluster credentials never leave this device and are never sent to the RIM server or to the AI model provider.",
+  "author": "RIM team",
+  "runtime_kind": "DesktopLocalProcess",
+  "entrypoint": "main.ts",
+  "capabilities": ["ui.panel", "ui.notify"],
+  "commands": [
+    {
+      "id": "refresh",
+      "title": "Pods: Refresh",
+      "description": "Lists the pods of the chosen kubeconfig context and namespace again.",
+      "keybind_capable": true,
+      "dangerous": false,
+      "required_context": [],
+      "required_capabilities": [],
+      "arguments": [],
+      "ai_callable": true,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "context": { "type": "string" },
+          "namespace": { "type": "string" },
+          "totalPods": { "type": "integer" },
+          "pods": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "status": { "type": "string" },
+                "ready": { "type": "string" },
+                "restarts": { "type": "integer" },
+                "age": { "type": "string" },
+                "node": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "filter",
+      "title": "Pods: Filter",
+      "description": "Chooses the context, namespace, name filter or refresh interval, then lists the pods. Without arguments it clears the name filter.",
+      "keybind_capable": true,
+      "dangerous": false,
+      "required_context": [],
+      "required_capabilities": [],
+      "arguments": [
+        {
+          "name": "text",
+          "type": "string",
+          "required": false,
+          "description": "Show only pods whose name or status contains this text. Empty clears it."
+        },
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "description": "Namespace to list."
+        },
+        {
+          "name": "context",
+          "type": "string",
+          "required": false,
+          "description": "kubeconfig context to use."
+        },
+        {
+          "name": "interval_seconds",
+          "type": "integer",
+          "required": false,
+          "description": "Refresh every this many seconds, 5 to 3600, or 0 to stop."
+        }
+      ],
+      "ai_callable": true,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "context": { "type": "string" },
+          "namespace": { "type": "string" },
+          "totalPods": { "type": "integer" },
+          "pods": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "status": { "type": "string" },
+                "ready": { "type": "string" },
+                "restarts": { "type": "integer" },
+                "age": { "type": "string" },
+                "node": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "restart_pod",
+      "title": "Pods: Restart pod",
+      "description": "Deletes a pod so its controller starts a fresh one. Asks you to confirm first; the AI agent can suggest it but never run it.",
+      "keybind_capable": false,
+      "dangerous": true,
+      "required_context": [],
+      "required_capabilities": [],
+      "arguments": [
+        { "name": "pod", "type": "string", "required": true, "description": "Pod to restart." },
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "description": "Defaults to the namespace the panel shows."
+        },
+        {
+          "name": "context",
+          "type": "string",
+          "required": false,
+          "description": "Defaults to the context the panel shows."
+        }
+      ],
+      "ai_callable": true,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "pod": { "type": "string" },
+          "namespace": { "type": "string" },
+          "context": { "type": "string" },
+          "controller": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "keybind_suggestions": [
+    { "keystroke": "Ctrl+Alt+P", "command_id": "refresh", "context": "GLOBAL", "preset_args": null }
+  ],
+  "context_actions": [],
+  "panels": [
+    {
+      "id": "pods",
+      "title": "Pods",
+      "description": "Pods of one namespace, refreshed on an interval.",
+      "slot": "main_area"
+    }
+  ],
+  "settings_schema": []
+}

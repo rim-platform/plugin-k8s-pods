@@ -1,0 +1,99 @@
+{
+  "config": {
+    "kind": "Config",
+    "apiVersion": "v1",
+    "preferences": {},
+    "clusters": [
+      {
+        "name": "kind-dev",
+        "cluster": {
+          "server": "https://127.0.0.1:6443",
+          "certificate-authority-data": "DATA+OMITTED"
+        }
+      },
+      { "name": "prod", "cluster": { "server": "https://prod.example.com" } }
+    ],
+    "users": [
+      {
+        "name": "kind-dev",
+        "user": { "client-certificate-data": "DATA+OMITTED", "client-key-data": "DATA+OMITTED" }
+      },
+      { "name": "prod", "user": { "token": "REDACTED" } }
+    ],
+    "contexts": [
+      {
+        "name": "kind-dev",
+        "context": { "cluster": "kind-dev", "user": "kind-dev", "namespace": "shop" }
+      },
+      { "name": "prod", "context": { "cluster": "prod", "user": "prod" } }
+    ],
+    "current-context": "kind-dev"
+  },
+  "namespaces": {
+    "kind": "List",
+    "items": [
+      { "metadata": { "name": "shop" } },
+      { "metadata": { "name": "default" } },
+      { "metadata": { "name": "kube-system" } }
+    ]
+  },
+  "pods": {
+    "shop": {
+      "kind": "List",
+      "items": [
+        {
+          "metadata": {
+            "name": "web-7f9c-abcde",
+            "creationTimestamp": "2026-10-08T10:00:00Z",
+            "ownerReferences": [{ "kind": "ReplicaSet", "name": "web-7f9c", "controller": true }]
+          },
+          "spec": { "nodeName": "kind-control-plane", "containers": [{ "name": "web" }] },
+          "status": {
+            "phase": "Running",
+            "containerStatuses": [
+              {
+                "name": "web",
+                "ready": true,
+                "restartCount": 0,
+                "state": { "running": { "startedAt": "2026-10-08T10:00:05Z" } }
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "worker-5d8b-fghij",
+            "creationTimestamp": "2026-10-07T12:00:00Z",
+            "ownerReferences": [{ "kind": "ReplicaSet", "name": "worker-5d8b", "controller": true }]
+          },
+          "spec": {
+            "nodeName": "kind-control-plane",
+            "containers": [{ "name": "worker" }, { "name": "sidecar" }]
+          },
+          "status": {
+            "phase": "Running",
+            "containerStatuses": [
+              { "name": "sidecar", "ready": true, "restartCount": 1, "state": { "running": {} } },
+              {
+                "name": "worker",
+                "ready": false,
+                "restartCount": 6,
+                "state": { "waiting": { "reason": "CrashLoopBackOff" } }
+              }
+            ]
+          }
+        },
+        {
+          "metadata": { "name": "debug", "creationTimestamp": "2026-10-08T11:58:30Z" },
+          "spec": { "nodeName": "kind-control-plane", "containers": [{ "name": "shell" }] },
+          "status": {
+            "phase": "Running",
+            "containerStatuses": [
+              { "name": "shell", "ready": true, "restartCount": 0, "state": { "running": {} } }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pods</title>
+    <style>
+      /* RIM sends its design tokens as theme.changed; these are the fallbacks. */
+      :root {
+        --color-rim-void: #0d0d0f;
+        --color-rim-panel: #141418;
+        --color-rim-panel-soft: #1a1a20;
+        --color-rim-line: #2a2a33;
+        --color-rim-accent: #8b8bff;
+        --color-rim-warm: #f0b35a;
+        --color-rim-danger: #f06a6a;
+        --color-rim-text: #e0e0e6;
+        --color-rim-text-muted: #a0a0b0;
+        --color-rim-text-faint: #6a6a78;
+        --ok: #5fd38d;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        font-size: 13px;
+        background: var(--color-rim-void);
+        color: var(--color-rim-text);
+      }
+      header {
+        position: sticky;
+        top: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        padding: 0.6rem 0.75rem;
+        border-bottom: 1px solid var(--color-rim-line);
+        background: var(--color-rim-panel);
+      }
+      label {
+        display: flex;
+        gap: 0.35rem;
+        align-items: center;
+        color: var(--color-rim-text-muted);
+        font-size: 12px;
+      }
+      select,
+      input {
+        height: 1.75rem;
+        padding: 0 0.4rem;
+        border: 1px solid var(--color-rim-line);
+        border-radius: 6px;
+        background: var(--color-rim-void);
+        color: var(--color-rim-text);
+        font: inherit;
+        font-size: 12px;
+      }
+      input[type="search"] {
+        width: 12rem;
+      }
+      button {
+        height: 1.75rem;
+        padding: 0 0.7rem;
+        border: 1px solid var(--color-rim-line);
+        border-radius: 6px;
+        background: var(--color-rim-panel-soft);
+        color: var(--color-rim-text);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--color-rim-accent);
+      }
+      button.danger:hover {
+        border-color: var(--color-rim-danger);
+        color: var(--color-rim-danger);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .spacer {
+        flex: 1;
+      }
+      #updated {
+        color: var(--color-rim-text-faint);
+        font-size: 11px;
+      }
+      .banner {
+        margin: 0.75rem;
+        padding: 0.6rem 0.75rem;
+        border: 1px solid var(--color-rim-line);
+        border-left-width: 3px;
+        border-radius: 6px;
+        background: var(--color-rim-panel);
+        line-height: 1.4;
+      }
+      .banner.error {
+        border-left-color: var(--color-rim-danger);
+      }
+      .banner.ok {
+        border-left-color: var(--ok);
+      }
+      .banner .detail {
+        margin-top: 0.25rem;
+        color: var(--color-rim-text-faint);
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        word-break: break-word;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th {
+        position: sticky;
+        top: 0;
+        padding: 0.4rem 0.75rem;
+        text-align: left;
+        font-weight: 500;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--color-rim-text-faint);
+        background: var(--color-rim-void);
+      }
+      td {
+        padding: 0.35rem 0.75rem;
+        border-top: 1px solid var(--color-rim-line);
+        white-space: nowrap;
+      }
+      td.name {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        white-space: normal;
+        word-break: break-all;
+      }
+      td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      tr.selected td {
+        background: var(--color-rim-panel-soft);
+      }
+      .status-ok {
+        color: var(--ok);
+      }
+      .status-warn {
+        color: var(--color-rim-warm);
+      }
+      .status-bad {
+        color: var(--color-rim-danger);
+      }
+      .empty {
+        padding: 2rem 0.75rem;
+        text-align: center;
+        color: var(--color-rim-text-muted);
+      }
+      footer {
+        padding: 0.5rem 0.75rem;
+        color: var(--color-rim-text-faint);
+        font-size: 11px;
+      }
+      kbd {
+        font-family: ui-monospace, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <label
+        >Context
+        <select id="context" aria-label="Context"></select
+      ></label>
+      <label
+        >Namespace
+        <select id="namespace" aria-label="Namespace"></select
+        ><input id="namespace-input" aria-label="Namespace" hidden
+      /></label>
+      <input id="filter" type="search" placeholder="Filter pods (/)" aria-label="Filter pods" />
+      <label
+        >Refresh
+        <select id="interval" aria-label="Refresh interval">
+          <option value="0">off</option>
+          <option value="5">5s</option>
+          <option value="15">15s</option>
+          <option value="30">30s</option>
+          <option value="60">1m</option>
+          <option value="300">5m</option>
+        </select></label
+      >
+      <span class="spacer"></span>
+      <span id="updated" aria-live="polite"></span>
+      <button id="refresh" type="button" title="Refresh (r)">Refresh</button>
+    </header>
+    <div id="action" class="banner" hidden></div>
+    <div id="error" class="banner error" role="alert" hidden></div>
+    <table id="table" hidden>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Ready</th>
+          <th class="num">Restarts</th>
+          <th class="num">Age</th>
+          <th>Node</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty">Loading pods…</div>
+    <footer>
+      <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>r</kbd> refresh · <kbd>/</kbd> filter ·
+      <kbd>x</kbd> restart the selected pod (asks first) · kubectl runs on this device with your
+      kubeconfig; credentials stay here.
+    </footer>
+    <script src="app.js"></script>
+  </body>
+</html>
