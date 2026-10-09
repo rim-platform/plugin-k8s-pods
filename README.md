@@ -26,7 +26,8 @@ move, <kbd>r</kbd> refreshes, <kbd>/</kbd> filters, <kbd>x</kbd> restarts the se
 pod (after the confirmation).
 
 A pod with no controller (no ReplicaSet, StatefulSet, Job, …) is never restarted: deleting
-it would remove it for good.
+it would remove it for good. Neither is a static pod, which the kubelet runs from a file on
+its node: deleting it through the API would restart nothing.
 
 When something is wrong the panel says so: no kubectl or no kubeconfig, a cluster it
 cannot reach, credentials the cluster refused, or a namespace your account may not read.

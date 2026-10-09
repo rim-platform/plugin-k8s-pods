@@ -329,6 +329,13 @@ export function createPlugin(options: K8sPodsOptions = {}) {
                 { data: { reason: "no_controller" } },
               );
             }
+            if (controller.startsWith("Node/")) {
+              throw new PluginError(
+                `${pod} is a static pod: the kubelet on its node runs it from a file, so deleting it here restarts nothing. ` +
+                  "Restart it on the node instead.",
+                { data: { reason: "static_pod" } },
+              );
+            }
             await deletePod(kubectl, context, namespace, pod);
             const message = `Restarted ${pod} in ${namespace}: ${controller} starts a new pod.`;
             await publish({ lastAction: action(pod, namespace, context, true, message) });

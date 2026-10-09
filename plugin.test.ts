@@ -4,19 +4,24 @@ import { describe, expect, it } from "vitest";
 
 import { startTestHost } from "../../sdk/plugin-sdk/src/testing.ts";
 import { createPlugin, PANEL_ID, type PanelState } from "./plugin.ts";
+import type { Kubectl } from "./kubectl.ts";
 import { fakeKubectl, type Scenario } from "./test/fake-cluster.ts";
 
 const MANIFEST = `${import.meta.dirname}/rim-plugin.json`;
 const NOW = new Date("2026-10-08T12:00:00Z");
 const CONFIRMED = { confirmed: true } as const;
 
-function start(scenario: Scenario = "ok", grantedCapabilities = ["ui.panel", "ui.notify"]) {
+function start(
+  scenario: Scenario = "ok",
+  grantedCapabilities = ["ui.panel", "ui.notify"],
+  wrap: (kubectl: Kubectl) => Kubectl = (kubectl) => kubectl,
+) {
   const fake = fakeKubectl(scenario);
   const ticks: Array<() => void> = [];
   const intervals: number[] = [];
   const panels: PanelState[] = [];
   const plugin = createPlugin({
-    kubectl: fake.kubectl,
+    kubectl: wrap(fake.kubectl),
     now: () => NOW,
     every: (ms, run) => {
       intervals.push(ms);
@@ -178,6 +183,29 @@ describe("k8s-pods plugin", () => {
     expect(missing.error?.data).toEqual({ reason: "not_found" });
     const noPod = await t.host.execute("restart_pod", {}, CONFIRMED);
     expect(noPod.error?.message).toMatch(/^pod is required/);
+    await t.host.shutdown();
+  });
+
+  it("refuses to restart a static pod, which deleting would not restart", async () => {
+    const mirror = {
+      metadata: {
+        name: "kube-apiserver-cp",
+        ownerReferences: [{ kind: "Node", name: "cp", controller: true }],
+      },
+    };
+    const t = start(
+      "ok",
+      undefined,
+      (kubectl) => async (args) =>
+        args[0] === "get" && args[2] === "kube-apiserver-cp"
+          ? JSON.stringify(mirror)
+          : kubectl(args),
+    );
+    await t.host.handshake();
+    await settled(t.panel);
+    const answer = await t.host.execute("restart_pod", { pod: "kube-apiserver-cp" }, CONFIRMED);
+    expect(answer.error?.data).toEqual({ reason: "static_pod" });
+    expect(t.fake.calls.some((c) => c[0] === "delete")).toBe(false);
     await t.host.shutdown();
   });
 
