@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "plugin_id": "chat.rim.k8s-pods",
   "display_name": "Kubernetes Pods",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Lists the pods of a Kubernetes namespace with status, restarts and age, and restarts a pod after you confirm. It runs kubectl on this device with your own kubeconfig: your cluster credentials never leave this device and are never sent to the RIM server or to the AI model provider.",
   "author": "RIM team",
   "runtime_kind": "DesktopLocalProcess",
@@ -22,20 +22,38 @@
       "output_schema": {
         "type": "object",
         "properties": {
-          "context": { "type": "string" },
-          "namespace": { "type": "string" },
-          "totalPods": { "type": "integer" },
+          "context": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "totalPods": {
+            "type": "integer"
+          },
           "pods": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "name": { "type": "string" },
-                "status": { "type": "string" },
-                "ready": { "type": "string" },
-                "restarts": { "type": "integer" },
-                "age": { "type": "string" },
-                "node": { "type": "string" }
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "ready": {
+                  "type": "string"
+                },
+                "restarts": {
+                  "type": "integer"
+                },
+                "age": {
+                  "type": "string"
+                },
+                "node": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -80,20 +98,38 @@
       "output_schema": {
         "type": "object",
         "properties": {
-          "context": { "type": "string" },
-          "namespace": { "type": "string" },
-          "totalPods": { "type": "integer" },
+          "context": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "totalPods": {
+            "type": "integer"
+          },
           "pods": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "name": { "type": "string" },
-                "status": { "type": "string" },
-                "ready": { "type": "string" },
-                "restarts": { "type": "integer" },
-                "age": { "type": "string" },
-                "node": { "type": "string" }
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "ready": {
+                  "type": "string"
+                },
+                "restarts": {
+                  "type": "integer"
+                },
+                "age": {
+                  "type": "string"
+                },
+                "node": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -109,7 +145,12 @@
       "required_context": [],
       "required_capabilities": [],
       "arguments": [
-        { "name": "pod", "type": "string", "required": true, "description": "Pod to restart." },
+        {
+          "name": "pod",
+          "type": "string",
+          "required": true,
+          "description": "Pod to restart."
+        },
         {
           "name": "namespace",
           "type": "string",
@@ -127,16 +168,29 @@
       "output_schema": {
         "type": "object",
         "properties": {
-          "pod": { "type": "string" },
-          "namespace": { "type": "string" },
-          "context": { "type": "string" },
-          "controller": { "type": "string" }
+          "pod": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "controller": {
+            "type": "string"
+          }
         }
       }
     }
   ],
   "keybind_suggestions": [
-    { "keystroke": "Ctrl+Alt+P", "command_id": "refresh", "context": "GLOBAL", "preset_args": null }
+    {
+      "keystroke": "Ctrl+Alt+P",
+      "command_id": "refresh",
+      "context": "GLOBAL",
+      "preset_args": null
+    }
   ],
   "context_actions": [],
   "panels": [

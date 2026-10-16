@@ -19,7 +19,7 @@ the version in `rim-plugin.json` and in `package.json`.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-10-16
+## [0.0.1] - 2026-10-16
 
 ### Added
 
@@ -31,5 +31,5 @@ the version in `rim-plugin.json` and in `package.json`.
   SDK inside, and `panels/`), so the desktop installs it from its git URL with nothing to
   `npm install`; each release attaches a `.rimbundle` for Install from link.
 
-[Unreleased]: https://github.com/rim-platform/plugin-k8s-pods/compare/v0.1.0...master
-[0.1.0]: https://github.com/rim-platform/plugin-k8s-pods/releases/tag/v0.1.0
+[Unreleased]: https://github.com/rim-platform/plugin-k8s-pods/compare/v0.0.1...master
+[0.0.1]: https://github.com/rim-platform/plugin-k8s-pods/releases/tag/v0.0.1
