@@ -6,7 +6,7 @@
   "description": "Lists the pods of a Kubernetes namespace with status, restarts and age, and restarts a pod after you confirm. It runs kubectl on this device with your own kubeconfig: your cluster credentials never leave this device and are never sent to the RIM server or to the AI model provider.",
   "author": "RIM team",
   "runtime_kind": "DesktopLocalProcess",
-  "entrypoint": "main.ts",
+  "entrypoint": "main.mjs",
   "capabilities": ["ui.panel", "ui.notify"],
   "commands": [
     {

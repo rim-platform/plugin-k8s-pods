@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PanelState } from "./plugin.ts";
 
-const dir = `${import.meta.dirname}/panels/pods`;
+const dir = `${import.meta.dirname}/../panels/pods`;
 const html = readFileSync(`${dir}/index.html`, "utf8");
 const script = readFileSync(`${dir}/app.js`, "utf8");
 

@@ -1,0 +1,43 @@
+{
+  "name": "rim-plugin-k8s-pods",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RIM plugin that lists a Kubernetes namespace's pods and restarts one after you confirm",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/rim-platform/plugin-k8s-pods",
+  "bugs": {
+    "url": "https://github.com/rim-platform/plugin-k8s-pods/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rim-platform/plugin-k8s-pods.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "rim-plugin-bundle --in-place --entry src/main.ts .",
+    "check": "rim-plugin-bundle --check --entry src/main.ts .",
+    "bundle": "rim-plugin-bundle --entry src/main.ts .",
+    "test": "vitest run",
+    "typecheck": "tsc",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@rim-platform/plugin-sdk": "0.1.0",
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.1",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.13.0",
+    "jsdom": "29.0.1",
+    "prettier": "3.9.9",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "4.1.11"
+  }
+}

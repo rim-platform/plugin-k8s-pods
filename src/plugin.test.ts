@@ -1,13 +1,14 @@
 // Tests the pods plugin against the SDK's in-memory host and a pretend
 // cluster: no RIM app, no kubectl and no cluster needed.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { startTestHost } from "@rim-platform/plugin-sdk/testing";
+import { startTestHost, validateManifest } from "@rim-platform/plugin-sdk/testing";
 
 import { createPlugin, PANEL_ID, type PanelState } from "./plugin.ts";
 import type { Kubectl } from "./kubectl.ts";
 import { fakeKubectl, type Scenario } from "./test/fake-cluster.ts";
 
-const MANIFEST = `${import.meta.dirname}/rim-plugin.json`;
+const MANIFEST = `${import.meta.dirname}/../rim-plugin.json`;
 const NOW = new Date("2026-10-08T12:00:00Z");
 const CONFIRMED = { confirmed: true } as const;
 
@@ -55,6 +56,24 @@ async function settled(panel: () => PanelState | undefined) {
 }
 
 describe("k8s-pods plugin", () => {
+  it("has a manifest the host installs, with restart_pod the one dangerous command", () => {
+    const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+    expect(() => validateManifest(manifest)).not.toThrow();
+    expect(manifest.capabilities).toEqual(["ui.panel", "ui.notify"]);
+    expect(
+      manifest.commands.map((c: { id: string; dangerous: boolean; keybind_capable: boolean }) => [
+        c.id,
+        c.dangerous,
+        c.keybind_capable,
+      ]),
+    ).toEqual([
+      ["refresh", false, true],
+      ["filter", false, true],
+      ["restart_pod", true, false],
+    ]);
+    expect(manifest.description).toContain("credentials never leave this device");
+  });
+
   it("lists the current context's pods on start and refreshes on the interval", async () => {
     const t = start();
     await t.host.handshake();

@@ -2,15 +2,24 @@
 // through its #! line, speaking frames over real stdin and stdout, with a fake
 // kubectl standing in for the user's.
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { encodeFrame, FrameDecoder } from "@rim-platform/plugin-sdk";
 
-const PLUGIN_DIR = import.meta.dirname;
-const BUNDLER = join(PLUGIN_DIR, "../../sdk/plugin-sdk/scripts/bundle-plugin.mjs");
-const FAKE_KUBECTL = join(PLUGIN_DIR, "test/bin/kubectl");
+const PLUGIN_DIR = join(import.meta.dirname, "..");
+const FAKE_KUBECTL = join(import.meta.dirname, "test/bin/kubectl");
+
+/** The installed SDK's `rim-plugin-bundle`, as `npx rim-plugin-bundle` runs it. */
+function bundlerPath(): string {
+  const packageJson = createRequire(import.meta.url).resolve(
+    "@rim-platform/plugin-sdk/package.json",
+  );
+  const { bin } = JSON.parse(readFileSync(packageJson, "utf8"));
+  return join(dirname(packageJson), bin["rim-plugin-bundle"]);
+}
 const PRINCIPAL = {
   principalId: "rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU",
   displayName: "Jakub",
@@ -62,11 +71,16 @@ function execute(id: number, commandId: string, args: Frame, confirmed: boolean)
 describe("Kubernetes Pods plugin, bundled", () => {
   it("ships its panel and speaks v1 over stdio", async () => {
     const outDir = join(mkdtempSync(join(tmpdir(), "rim-k8s-")), "chat.rim.k8s-pods");
-    execFileSync(process.execPath, [BUNDLER, PLUGIN_DIR, outDir]);
-    expect(existsSync(join(outDir, "panels/pods/index.html"))).toBe(true);
-    expect(existsSync(join(outDir, "panels/pods/app.js"))).toBe(true);
-    // The bundle carries what the plugin runs, not its tests or fakes.
-    expect(existsSync(join(outDir, "test"))).toBe(false);
+    execFileSync(process.execPath, [bundlerPath(), "--entry", "src/main.ts", PLUGIN_DIR, outDir]);
+    // The bundle carries what the plugin runs, not its sources, tests or fakes.
+    expect(readdirSync(outDir, { recursive: true }).sort()).toEqual([
+      "main.mjs",
+      "panels",
+      "panels/pods",
+      "panels/pods/app.js",
+      "panels/pods/index.html",
+      "rim-plugin.json",
+    ]);
 
     const plugin = launch(outDir);
     expect(plugin.manifest.entrypoint).toBe("main.mjs");

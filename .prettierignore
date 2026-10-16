@@ -1,0 +1,7 @@
+dist
+coverage
+node_modules
+package-lock.json
+# Built by `npm run build`, checked by `npm run check`.
+main.mjs
+*.md
