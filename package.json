@@ -1,6 +1,6 @@
 {
   "name": "rim-plugin-k8s-pods",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "description": "RIM plugin that lists a Kubernetes namespace's pods and restarts one after you confirm",
   "license": "Apache-2.0",
