@@ -6,8 +6,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-
-import { encodeFrame, FrameDecoder } from "../../sdk/plugin-sdk/src/framing.ts";
+import { encodeFrame, FrameDecoder } from "@rim-platform/plugin-sdk";
 
 const PLUGIN_DIR = import.meta.dirname;
 const BUNDLER = join(PLUGIN_DIR, "../../sdk/plugin-sdk/scripts/bundle-plugin.mjs");

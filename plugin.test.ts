@@ -1,8 +1,8 @@
 // Tests the pods plugin against the SDK's in-memory host and a pretend
 // cluster: no RIM app, no kubectl and no cluster needed.
 import { describe, expect, it } from "vitest";
+import { startTestHost } from "@rim-platform/plugin-sdk/testing";
 
-import { startTestHost } from "../../sdk/plugin-sdk/src/testing.ts";
 import { createPlugin, PANEL_ID, type PanelState } from "./plugin.ts";
 import type { Kubectl } from "./kubectl.ts";
 import { fakeKubectl, type Scenario } from "./test/fake-cluster.ts";
