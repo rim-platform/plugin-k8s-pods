@@ -2,15 +2,15 @@
 // refreshes them on an interval and on demand, and restarts a pod after the
 // user confirms. kubectl runs on this device with the user's kubeconfig, so
 // cluster credentials never leave it.
-//
-// Outside this repository, import from "@rim/plugin-sdk" instead of the path below.
+
 import {
   definePlugin,
   ErrorCode,
   HostRequestError,
   PluginError,
   type Host,
-} from "../../sdk/plugin-sdk/src/index.ts";
+} from "@rim-platform/plugin-sdk";
+
 import {
   deletePod,
   getPod,
