@@ -1,0 +1,192 @@
+name: Release
+
+# For a tag v<version>: checks the tag against the version in rim-plugin.json and package.json,
+# checks that the committed main.mjs and panels/ are a fresh build, bundles the plugin into
+# <plugin_id>-<version>.rimbundle, attests its build provenance, and publishes a GitHub release
+# with the version's CHANGELOG.md section, the bundle, SHA256SUMS and an Install from link line.
+# Only the maintainer may push v* tags, and the job waits for an approval in the `release`
+# environment. The release is created as a draft and published only once every asset is
+# attached, so a failure leaves at most a draft, which a re-run completes.
+#
+# The signed statement `<plugin_id>-<version>.rimsig.json` is not built here: the maintainer
+# signs the bundle in the desktop app and attaches the file to the release by hand.
+#
+# Every action is pinned to a full commit SHA, with its version in a comment.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Bundle and release
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Before anything is built: a tag that is not the plugin's version is not released.
+      - name: Check the tag against the plugin version
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>[-<pre-release>]"
+            exit 1
+          fi
+          manifest_version=$(jq -r .version rim-plugin.json)
+          package_version=$(jq -r .version package.json)
+          if [[ $version != "$manifest_version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $manifest_version in rim-plugin.json"
+            exit 1
+          fi
+          if [[ $version != "$package_version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $package_version in package.json"
+            exit 1
+          fi
+          if [[ $version == *-* ]]; then prerelease=true; else prerelease=false; fi
+          plugin_id=$(jq -r .plugin_id rim-plugin.json)
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "plugin_id=$plugin_id"
+            echo "display_name=$(jq -r .display_name rim-plugin.json)"
+            echo "bundle=$plugin_id-$version.rimbundle"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Extract the release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found && /^\[[^]]+\]: / { next }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no section [$VERSION] with entries"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      # Install from git URL runs the committed main.mjs: the tag must hold a fresh build.
+      - name: Fresh Build Check
+        run: npm run check
+
+      # Built from the sources, so the bundle's main.mjs is byte for byte the committed one.
+      - name: Bundle
+        id: bundle
+        env:
+          BUNDLE: ${{ steps.version.outputs.bundle }}
+        run: |
+          npm run bundle
+          mkdir release
+          cp "dist/$BUNDLE" release/
+          (cd release && sha256sum "$BUNDLE" > SHA256SUMS)
+          echo "sha256=$(cut -d ' ' -f 1 release/SHA256SUMS)" >> "$GITHUB_OUTPUT"
+
+      # SLSA build provenance for the bundle.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/${{ steps.version.outputs.bundle }}
+
+      - name: Write the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PLUGIN_ID: ${{ steps.version.outputs.plugin_id }}
+          BUNDLE: ${{ steps.version.outputs.bundle }}
+          SHA256: ${{ steps.bundle.outputs.sha256 }}
+        run: |
+          cat >> release-notes.md <<NOTES
+
+          ### Install
+
+          **Install from link** (Settings → Plugins, on the desktop and the web):
+
+          \`\`\`text
+          $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/$BUNDLE#sha256=$SHA256
+          \`\`\`
+
+          **Install from git URL** (Settings → Plugins, on the desktop):
+          \`$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git\` installs the built plugin on \`master\`.
+
+          ### Verify the bundle
+
+          \`\`\`text
+          $SHA256  $BUNDLE
+          \`\`\`
+
+          The bundle has a build provenance attestation from this repository's release workflow.
+          Next to the downloaded files:
+
+          \`\`\`sh
+          sha256sum --check SHA256SUMS
+          gh attestation verify $BUNDLE --repo $GITHUB_REPOSITORY
+          \`\`\`
+
+          The maintainer attaches \`$PLUGIN_ID-$VERSION.rimsig.json\`, the publisher's signed
+          statement for this bundle, by hand after the release. A workspace adds it to its plugin
+          registry with Workspace settings → Plugins → Add from files, together with the bundle.
+          NOTES
+
+      # A draft is not public, so nobody installs from the release until the last step
+      # publishes it. A re-run finds the draft and fills it.
+      - name: Create the draft release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          DISPLAY_NAME: ${{ steps.version.outputs.display_name }}
+        run: |
+          draft=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          if [[ $draft == false ]]; then
+            echo "::error::release $GITHUB_REF_NAME is already published"
+            exit 1
+          fi
+          if [[ $draft == none ]]; then
+            flags=()
+            if [[ $PRERELEASE == true ]]; then
+              flags+=(--prerelease)
+            fi
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+              --title "$DISPLAY_NAME $VERSION" --notes-file release-notes.md "${flags[@]}"
+          fi
+
+      - name: Upload the assets
+        run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber release/*
+
+      - name: Publish the release
+        env:
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          flags=(--draft=false)
+          if [[ $PRERELEASE != true ]]; then
+            flags+=(--latest)
+          fi
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --notes-file release-notes.md "${flags[@]}"

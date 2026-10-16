@@ -1,0 +1,6 @@
+RIM plugin chat.rim.k8s-pods (Kubernetes Pods)
+Part of the RIM project, https://github.com/rim-platform
+Copyright 2026 Jakub Dvořák
+
+main.mjs bundles @rim-platform/plugin-sdk, from the RIM project's rim-ui repository, under the
+Apache License 2.0.

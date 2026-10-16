@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/rim-platform/plugin-k8s-pods/blob/master/SECURITY.md
+    about: Report vulnerabilities privately as SECURITY.md describes, never in a public issue.
+  - name: A problem with the RIM app itself
+    url: https://github.com/rim-platform/rim-ui/issues
+    about: The app, the plugin host and the plugin SDK have their issues in rim-ui.
