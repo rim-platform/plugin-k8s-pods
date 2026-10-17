@@ -30,14 +30,14 @@
     "@eslint/js": "10.0.1",
     "@rim-platform/plugin-sdk": "0.1.0",
     "@types/node": "22.20.5",
-    "esbuild": "0.28.1",
+    "esbuild": "0.28.2",
     "eslint": "10.12.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.13.0",
     "jsdom": "29.0.1",
-    "prettier": "3.9.9",
+    "prettier": "3.9.10",
     "typescript": "5.8.3",
-    "typescript-eslint": "8.71.1",
+    "typescript-eslint": "8.71.2",
     "vitest": "4.1.11"
   }
 }
