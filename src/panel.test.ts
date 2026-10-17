@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PanelState } from "./plugin.ts";
+import type { LogView, PanelState } from "./plugin.ts";
 
 const dir = `${import.meta.dirname}/../panels/pods`;
 const html = readFileSync(`${dir}/index.html`, "utf8");
@@ -46,7 +46,30 @@ const STATE: PanelState = {
   loading: false,
   error: null,
   lastAction: null,
+  logs: null,
+  logTailLines: 100,
 };
+
+const LOGS: LogView = {
+  pod: "web-1",
+  namespace: "shop",
+  context: "kind-dev",
+  container: "web",
+  containers: ["web", "proxy"],
+  previous: false,
+  tailLines: 100,
+  following: true,
+  loading: false,
+  lines: ["started", "<b>not bold</b>"],
+  dropped: 0,
+  error: null,
+  ended: null,
+};
+
+const commands = () =>
+  sent
+    .filter((m) => m.type === "rim.command.execute")
+    .map((m) => [(m.commandId as string).replace("plugin.chat.rim.k8s-pods.", ""), m.args]);
 
 let sent: Array<Record<string, unknown>>;
 /** Listeners the page added to window and document, removed after each test. */
@@ -179,5 +202,107 @@ describe("Pods panel", () => {
       ["plugin.chat.rim.k8s-pods.filter", { text: "web" }],
       ["plugin.chat.rim.k8s-pods.filter", { context: "prod" }],
     ]);
+  });
+
+  it("keeps the selected pod when a refresh reorders the list", () => {
+    fromHost({ type: "panel.state_update", state: STATE });
+    press("j");
+    fromHost({ type: "panel.state_update", state: { ...STATE, pods: [...STATE.pods].reverse() } });
+    expect(document.querySelector("#rows tr.selected td")?.textContent).toBe(STATE.pods[1].name);
+    press("x");
+    expect(commands()).toEqual([
+      ["restart_pod", { pod: STATE.pods[1].name, namespace: "shop", context: "kind-dev" }],
+    ]);
+  });
+
+  it("offers no restart for a pod nothing would start again", () => {
+    const bare = { ...STATE.pods[0], name: "debug", controller: null };
+    const mirror = { ...STATE.pods[0], name: "kube-apiserver-cp", controller: "Node/cp" };
+    fromHost({ type: "panel.state_update", state: { ...STATE, pods: [bare, mirror] } });
+    const restarts = [...document.querySelectorAll<HTMLButtonElement>("#rows button.danger")];
+    expect(restarts.map((b) => b.disabled)).toEqual([true, true]);
+    expect(restarts[1].title).toMatch(/static pod/);
+    press("x");
+    expect(commands()).toEqual([]);
+    expect(sent[0]).toMatchObject({
+      type: "rim.ui.notification.show",
+      title: "Cannot restart debug",
+    });
+  });
+
+  it("shows an interval the dropdown does not list", () => {
+    fromHost({ type: "panel.state_update", state: { ...STATE, intervalSeconds: 10 } });
+    expect((document.getElementById("interval") as HTMLSelectElement).value).toBe("10");
+  });
+
+  it("colours waiting states apart from failures", () => {
+    const pods = ["Terminating", "Init:1/2", "Init:CrashLoopBackOff", "NotReady"].map(
+      (status, i) => ({ ...STATE.pods[0], name: `p${i}`, status }),
+    );
+    fromHost({ type: "panel.state_update", state: { ...STATE, pods } });
+    const classes = [...document.querySelectorAll("#rows tr")].map(
+      (row) => row.querySelectorAll("td")[1].className,
+    );
+    expect(classes).toEqual(["status-warn", "status-warn", "status-bad", "status-warn"]);
+  });
+
+  it("asks to follow a pod's logs from its row or with l", () => {
+    fromHost({ type: "panel.state_update", state: { ...STATE, logTailLines: 500 } });
+    document.querySelector<HTMLButtonElement>("#rows tr:nth-child(2) button")?.click();
+    press("l");
+    const args = (pod: string) => ({
+      pod,
+      namespace: "shop",
+      context: "kind-dev",
+      tail_lines: 500,
+      previous: false,
+      follow: true,
+    });
+    expect(commands()).toEqual([
+      ["pod_logs", args(STATE.pods[1].name)],
+      ["pod_logs", args(STATE.pods[1].name)],
+    ]);
+  });
+
+  it("shows the log view as text and changes it through the plugin", () => {
+    fromHost({ type: "panel.state_update", state: { ...STATE, logs: LOGS } });
+    expect(document.getElementById("table")?.hidden).toBe(true);
+    expect(document.getElementById("logs")?.hidden).toBe(false);
+    expect(document.getElementById("logs-text")?.textContent).toBe("started\n<b>not bold</b>");
+    expect(document.querySelector("#logs-text b")).toBeNull();
+    expect(document.getElementById("logs-status")?.textContent).toBe("Following new lines…");
+
+    const container = document.getElementById("logs-container") as HTMLSelectElement;
+    container.value = "proxy";
+    container.dispatchEvent(new Event("change"));
+    const lines = document.getElementById("logs-lines") as HTMLSelectElement;
+    lines.value = "1000";
+    lines.dispatchEvent(new Event("change"));
+    press("p");
+    press("f");
+    press("Escape");
+    const base = { pod: "web-1", namespace: "shop", context: "kind-dev", previous: false };
+    expect(commands()).toEqual([
+      ["pod_logs", { ...base, tail_lines: 100, follow: true, container: "proxy" }],
+      ["pod_logs", { ...base, tail_lines: 1000, follow: true, container: "web" }],
+      ["pod_logs", { ...base, tail_lines: 100, previous: true, follow: false, container: "web" }],
+      ["stop_logs", {}],
+      ["stop_logs", { close: true }],
+    ]);
+  });
+
+  it("says why logs stopped or failed", () => {
+    const view = (logs: Partial<LogView>) =>
+      fromHost({ type: "panel.state_update", state: { ...STATE, logs: { ...LOGS, ...logs } } });
+    view({ following: false, ended: "The container exited." });
+    expect(document.getElementById("logs-status")?.textContent).toBe("The container exited.");
+    view({ following: false, dropped: 7 });
+    expect(document.getElementById("logs-status")?.textContent).toBe(
+      "2 lines · older lines dropped, the last 2 are kept",
+    );
+    view({ error: { kind: "not_found", message: "No previous run." } });
+    expect(document.getElementById("logs-status")?.className).toBe("status-bad");
+    view({ previous: true, following: false });
+    expect((document.getElementById("logs-follow") as HTMLInputElement).disabled).toBe(true);
   });
 });

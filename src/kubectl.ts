@@ -131,7 +131,7 @@ function firstErrorLine(text: string): string {
   const lines = text.split(/\r?\n/).map((line) => line.trim());
   const line =
     lines.find((l) => /^error/i.test(l)) ?? lines.find((l) => l.length > 0) ?? "kubectl failed";
-  const clean = line.replace(/^error(:\s*)?/i, "").trim() || line;
+  const clean = line.replace(/^error(\s+from server(\s*\([^)]*\))?)?(:\s*)?/i, "").trim() || line;
   return clean.length > MAX_DETAIL_LENGTH ? `${clean.slice(0, MAX_DETAIL_LENGTH)}…` : clean;
 }
 
@@ -241,6 +241,50 @@ export async function deletePod(
     `--namespace=${namespace}`,
     REQUEST_TIMEOUT,
   ]);
+}
+
+/** The most log bytes one call without follow returns, well under the host's frame limit. */
+export const MAX_LOG_BYTES = 256 * 1024;
+
+/** What to read from a pod's logs: one container, its last lines, of this run or the one before. */
+export interface LogRequest {
+  readonly container: string;
+  readonly tailLines: number;
+  readonly previous: boolean;
+}
+
+/**
+ * The `kubectl logs` command line. A followed log has no request timeout, since
+ * it streams until stopped, and no byte limit, which would end the stream.
+ */
+export function logArgs(
+  context: string,
+  namespace: string,
+  pod: string,
+  request: LogRequest,
+  follow: boolean,
+): string[] {
+  return [
+    "logs",
+    pod,
+    `--container=${request.container}`,
+    `--tail=${request.tailLines}`,
+    ...(request.previous ? ["--previous"] : []),
+    ...(follow ? ["--follow"] : [`--limit-bytes=${MAX_LOG_BYTES}`, REQUEST_TIMEOUT]),
+    `--context=${context}`,
+    `--namespace=${namespace}`,
+  ];
+}
+
+/** The last lines one container printed, at most {@link MAX_LOG_BYTES}. */
+export async function getLogs(
+  kubectl: Kubectl,
+  context: string,
+  namespace: string,
+  pod: string,
+  request: LogRequest,
+): Promise<string> {
+  return kubectl(logArgs(context, namespace, pod, request, false));
 }
 
 function parseJson(text: string): Record<string, unknown> {

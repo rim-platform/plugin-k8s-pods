@@ -1,7 +1,8 @@
 # Kubernetes Pods
 
 A [RIM](https://github.com/rim-platform) plugin that lists the pods of a Kubernetes namespace in
-a panel, with status, restarts and age, and restarts a pod after you confirm. It is a
+a panel, with status, restarts and age, shows and follows a container's logs, and restarts a pod
+after you confirm. It is a
 `DesktopLocalProcess` plugin built on
 [`@rim-platform/plugin-sdk`](https://www.npmjs.com/package/@rim-platform/plugin-sdk): the RIM
 desktop app runs it as a program on your computer.
@@ -9,10 +10,11 @@ desktop app runs it as a program on your computer.
 ## Your credentials stay on this device
 
 The plugin runs `kubectl` on your machine with your own kubeconfig. It never reads your
-credentials itself: it only sees what `kubectl` prints (pod lists, the names of your contexts)
-and its error text. Nothing from your cluster or your kubeconfig is sent to the RIM server or to
-the AI model provider. The AI agent sees a pod listing only when you let it call the plugin's
-commands (Settings → Plugins → AI permissions).
+credentials itself: it only sees what `kubectl` prints (pod lists, logs, the names of your
+contexts) and its error text. Nothing from your cluster or your kubeconfig is sent to the RIM
+server or to the AI model provider. The AI agent sees a pod listing only when you let it call the
+plugin's commands (Settings → Plugins → AI permissions), and pod logs only when you allow
+**Pods: Show logs** there as well: logs can hold secrets and personal data, so it starts off.
 
 ## What it asks for
 
@@ -31,15 +33,25 @@ below. Install it only if you trust its author." It asks for two permissions:
 | **Pods: Refresh** (`refresh`)         | safe      | Lists the pods again. Suggested keybind: <kbd>Ctrl+Alt+P</kbd>.                                                |
 | **Pods: Filter** (`filter`)           | safe      | Picks the context, namespace, name filter or refresh interval. With no arguments it clears the name filter.    |
 | **Pods: Restart pod** (`restart_pod`) | dangerous | Deletes a pod so its controller starts a fresh one. RIM asks you to confirm; the AI agent can only propose it. |
+| **Pods: Show logs** (`pod_logs`) | safe | Shows a container's last lines (100 at first, up to 5000), from its current or previous run, and follows new ones in the panel. The AI agent reads them once, never follows, and only if you allow it. |
+| **Pods: Stop following logs** (`stop_logs`) | safe | Stops following; with `close`, closes the log view. |
 
 The **Pods** panel lists the pods and refreshes every 15 seconds (5 s to 5 min, or off). Pick
 the context and namespace at the top. Keys in the panel: <kbd>j</kbd>/<kbd>k</kbd> move,
-<kbd>r</kbd> refreshes, <kbd>/</kbd> filters, <kbd>x</kbd> restarts the selected pod (after the
-confirmation).
+<kbd>r</kbd> refreshes, <kbd>/</kbd> filters, <kbd>l</kbd> opens the selected pod's logs,
+<kbd>x</kbd> restarts the selected pod (after the confirmation).
+
+**Logs** on a pod's row opens its log view and follows new lines as the container prints them.
+Pick the container (init containers and sidecars too), how many of the last lines to start with
+(the plugin keeps your choice until RIM restarts), or the previous run, e.g. after a crash. In
+the log view <kbd>f</kbd> turns following on or off, <kbd>p</kbd> switches to the previous run,
+<kbd>r</kbd> reads again and <kbd>Esc</kbd> goes back to the pods. The view keeps the newest 5000
+lines (256 KiB) and shows them as plain text, without terminal colours.
 
 A pod with no controller (no ReplicaSet, StatefulSet, Job, …) is never restarted: deleting it
 would remove it for good. Neither is a static pod, which the kubelet runs from a file on its
-node: deleting it through the API would restart nothing.
+node: deleting it through the API would restart nothing. The panel greys out **Restart** for
+both.
 
 When something is wrong the panel says so: no kubectl or no kubeconfig, a cluster it cannot
 reach, credentials the cluster refused, or a namespace your account may not read. If your

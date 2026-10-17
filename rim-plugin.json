@@ -3,7 +3,7 @@
   "plugin_id": "chat.rim.k8s-pods",
   "display_name": "Kubernetes Pods",
   "version": "0.0.1",
-  "description": "Lists the pods of a Kubernetes namespace with status, restarts and age, and restarts a pod after you confirm. It runs kubectl on this device with your own kubeconfig: your cluster credentials never leave this device and are never sent to the RIM server or to the AI model provider.",
+  "description": "Lists the pods of a Kubernetes namespace with status, restarts and age, shows and follows a container's logs, and restarts a pod after you confirm. It runs kubectl on this device with your own kubeconfig: your cluster credentials never leave this device and are never sent to the RIM server or to the AI model provider. Pod logs reach the AI agent only if you allow its Pods: Show logs command in the plugin's AI access settings.",
   "author": "RIM team",
   "runtime_kind": "DesktopLocalProcess",
   "entrypoint": "main.mjs",
@@ -182,6 +182,116 @@
           }
         }
       }
+    },
+    {
+      "id": "pod_logs",
+      "title": "Pods: Show logs",
+      "description": "Shows the last lines a pod's container printed, and follows new ones in the Pods panel. The AI agent may read them only if you allow this command in the plugin's AI access settings; it never follows them.",
+      "keybind_capable": false,
+      "dangerous": false,
+      "required_context": [],
+      "required_capabilities": [],
+      "arguments": [
+        {
+          "name": "pod",
+          "type": "string",
+          "required": true,
+          "description": "Pod whose logs to show."
+        },
+        {
+          "name": "container",
+          "type": "string",
+          "required": false,
+          "description": "Container to read. Defaults to the pod's default container, as kubectl picks it."
+        },
+        {
+          "name": "tail_lines",
+          "type": "integer",
+          "required": false,
+          "description": "How many of the last lines to show, 1 to 5000. Defaults to the last count chosen, 100 at first."
+        },
+        {
+          "name": "previous",
+          "type": "boolean",
+          "required": false,
+          "description": "Read the container's previous run, e.g. after a crash."
+        },
+        {
+          "name": "follow",
+          "type": "boolean",
+          "required": false,
+          "description": "Keep adding new lines as the container prints them, in the Pods panel."
+        },
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "description": "Defaults to the namespace the panel shows."
+        },
+        {
+          "name": "context",
+          "type": "string",
+          "required": false,
+          "description": "Defaults to the context the panel shows."
+        }
+      ],
+      "ai_callable": true,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "pod": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "container": {
+            "type": "string"
+          },
+          "containers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "previous": {
+            "type": "boolean"
+          },
+          "tailLines": {
+            "type": "integer"
+          },
+          "following": {
+            "type": "boolean"
+          },
+          "logs": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "stop_logs",
+      "title": "Pods: Stop following logs",
+      "description": "Stops following a pod's logs in the Pods panel; with close, closes the log view too.",
+      "keybind_capable": true,
+      "dangerous": false,
+      "required_context": [],
+      "required_capabilities": [],
+      "arguments": [
+        {
+          "name": "close",
+          "type": "boolean",
+          "required": false,
+          "description": "Close the log view as well."
+        }
+      ],
+      "ai_callable": false
     }
   ],
   "keybind_suggestions": [
@@ -197,7 +307,7 @@
     {
       "id": "pods",
       "title": "Pods",
-      "description": "Pods of one namespace, refreshed on an interval.",
+      "description": "Pods of one namespace, refreshed on an interval, and a container's logs.",
       "slot": "main_area"
     }
   ],

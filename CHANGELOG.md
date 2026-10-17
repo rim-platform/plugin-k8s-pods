@@ -19,7 +19,25 @@ the version in `rim-plugin.json` and in `package.json`.
 
 ## [Unreleased]
 
+### Added
+
+- **Pods: Show logs** (`pod_logs`) and a **Logs** button on each pod (key <kbd>l</kbd>): the last
+  lines of a container, its previous run, or new lines followed as they arrive, 100 lines at
+  first and up to 5000. The AI agent may read logs only after you allow this command in the
+  plugin's AI permissions; it never follows them. **Pods: Stop following logs** (`stop_logs`)
+  stops following and closes the view.
+
 ### Fixed
+
+- A namespace or context picked while the first listing still ran is kept instead of being
+  replaced by the kubeconfig's.
+- The selected pod stays selected when a refresh reorders the list, so <kbd>x</kbd> restarts
+  the pod you picked.
+- **Restart** is greyed out for pods without a controller and for static pods, which it could
+  not restart.
+- A manual refresh lists namespaces created since the panel opened.
+- Waiting states (`Terminating`, `PodInitializing`, `NotReady`, …) show amber instead of red,
+  and a refresh interval set by command shows in the dropdown.
 
 - Pods with sidecar containers (init containers with `restartPolicy: Always`, such as the
   `dind` container of a GitHub Actions runner) show the status, ready count and restarts that

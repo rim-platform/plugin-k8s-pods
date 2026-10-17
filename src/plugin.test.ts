@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { startTestHost, validateManifest } from "@rim-platform/plugin-sdk/testing";
 
 import { createPlugin, PANEL_ID, type PanelState } from "./plugin.ts";
-import type { Kubectl } from "./kubectl.ts";
+import { KubeError, type Kubectl } from "./kubectl.ts";
+import type { FollowSink } from "./logs.ts";
 import { fakeKubectl, type Scenario } from "./test/fake-cluster.ts";
 
 const MANIFEST = `${import.meta.dirname}/../rim-plugin.json`;
@@ -18,6 +19,8 @@ function start(
   wrap: (kubectl: Kubectl) => Kubectl = (kubectl) => kubectl,
 ) {
   const fake = fakeKubectl(scenario);
+  /** Each `kubectl logs --follow` started, with its output sink and whether it was stopped. */
+  const follows: Array<{ args: readonly string[]; sink: FollowSink; stopped: boolean }> = [];
   const ticks: Array<() => void> = [];
   const intervals: number[] = [];
   const panels: PanelState[] = [];
@@ -31,18 +34,28 @@ function start(
         intervals.push(-ms);
       };
     },
+    follow: (args, sink) => {
+      const started = { args, sink, stopped: false };
+      follows.push(started);
+      return () => {
+        started.stopped = true;
+      };
+    },
+    logFlushMs: 0,
   });
   const host = startTestHost(plugin, {
     manifestPath: MANIFEST,
     grantedCapabilities,
     onRequest(method, params) {
-      const p = params as { panel_id: string; state: PanelState };
-      if (method === "rim.ui.update_panel" && p.panel_id === PANEL_ID) panels.push(p.state);
+      const p = params as { panel_id: string; state: PanelState; patch?: boolean };
+      if (method === "rim.ui.update_panel" && p.panel_id === PANEL_ID) {
+        panels.push(p.patch ? { ...(panels.at(-1) as PanelState), ...p.state } : p.state);
+      }
       return { ok: true };
     },
   });
   const panel = () => panels.at(-1) as PanelState;
-  return { host, fake, ticks, intervals, panels, panel };
+  return { host, fake, follows, ticks, intervals, panels, panel };
 }
 
 /** Wait until the plugin's first listing reached the panel. */
@@ -70,7 +83,14 @@ describe("k8s-pods plugin", () => {
       ["refresh", false, true],
       ["filter", false, true],
       ["restart_pod", true, false],
+      ["pod_logs", false, false],
+      ["stop_logs", false, true],
     ]);
+    // Logs reach the agent only once the user allows pod_logs for it in the host's settings.
+    const aiCallable = manifest.commands
+      .filter((c: { ai_callable: boolean }) => c.ai_callable)
+      .map((c: { id: string }) => c.id);
+    expect(aiCallable).toEqual(["refresh", "filter", "restart_pod", "pod_logs"]);
     expect(manifest.description).toContain("credentials never leave this device");
   });
 
@@ -151,6 +171,25 @@ describe("k8s-pods plugin", () => {
       const refused = await t.host.execute("filter", args);
       expect(refused.error).toMatchObject({ code: -32602, message });
     }
+    await t.host.shutdown();
+  });
+
+  it("keeps a namespace picked while the first listing still runs", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((done) => (release = done));
+    let first = true;
+    const t = start("ok", undefined, (kubectl) => async (args) => {
+      if (args[0] === "config" && first) {
+        first = false;
+        await gate;
+      }
+      return kubectl(args);
+    });
+    await t.host.handshake();
+    const picked = t.host.execute("filter", { namespace: "default" });
+    release();
+    expect((await picked).result?.message).toBe("0 pods in default (kind-dev)");
+    expect(t.panel()).toMatchObject({ namespace: "default", loading: false });
     await t.host.shutdown();
   });
 
@@ -267,5 +306,178 @@ describe("k8s-pods plugin", () => {
       true,
     );
     await t.host.shutdown();
+  });
+
+  describe("logs", () => {
+    const flushed = () => new Promise((done) => setTimeout(done, 10));
+
+    it("shows the default container's last 100 lines and remembers another count", async () => {
+      const t = start();
+      await t.host.handshake();
+      await settled(t.panel);
+
+      let answer = await t.host.execute("pod_logs", { pod: "web-7f9c-abcde" });
+      expect(answer.result?.message).toBe("Last 100 lines from the web in web-7f9c-abcde");
+      expect(t.fake.calls).toContainEqual([
+        "logs",
+        "web-7f9c-abcde",
+        "--container=web",
+        "--tail=100",
+        "--limit-bytes=262144",
+        "--request-timeout=15s",
+        "--context=kind-dev",
+        "--namespace=shop",
+      ]);
+      expect(t.panel().logs).toMatchObject({
+        pod: "web-7f9c-abcde",
+        container: "web",
+        containers: ["web"],
+        tailLines: 100,
+        following: false,
+        loading: false,
+        error: null,
+      });
+      expect(t.panel().logs?.lines.at(-1)).toBe("GET /health 200 150ms");
+
+      await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", tail_lines: "20" });
+      answer = await t.host.execute("pod_logs", { pod: "web-7f9c-abcde" });
+      expect(answer.result?.message).toBe("Last 20 lines from the web in web-7f9c-abcde");
+      expect(t.panel().logTailLines).toBe(20);
+      await t.host.shutdown();
+    });
+
+    it("reads plain text from another container and from the previous run", async () => {
+      const t = start();
+      await t.host.handshake();
+      await settled(t.panel);
+
+      await t.host.execute("pod_logs", { pod: "worker-5d8b-fghij" });
+      expect(t.panel().logs).toMatchObject({
+        container: "worker",
+        containers: ["worker", "sidecar"],
+        lines: ["INFO starting worker", "ERROR queue unreachable"],
+      });
+      await t.host.execute("pod_logs", { pod: "worker-5d8b-fghij", container: "sidecar" });
+      expect(t.panel().logs?.lines).toEqual(["proxy ready"]);
+      await t.host.execute("pod_logs", { pod: "worker-5d8b-fghij", previous: true });
+      expect(t.panel().logs).toMatchObject({
+        previous: true,
+        lines: ["INFO starting worker", "panic: queue unreachable"],
+      });
+
+      const none = await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", previous: "true" });
+      expect(none.error?.data).toEqual({ reason: "not_found" });
+      expect(t.panel().logs).toMatchObject({ pod: "web-7f9c-abcde", loading: false });
+      expect(t.panel().logs?.error?.message).toMatch(/previous terminated container "web"/);
+      await t.host.shutdown();
+    });
+
+    it("follows new lines in the panel until stopped, then closes", async () => {
+      const t = start();
+      await t.host.handshake();
+      await settled(t.panel);
+
+      const answer = await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", follow: true });
+      expect(answer.result?.message).toBe("Following web in web-7f9c-abcde");
+      expect(t.follows).toHaveLength(1);
+      expect(t.follows[0].args).toEqual([
+        "logs",
+        "web-7f9c-abcde",
+        "--container=web",
+        "--tail=100",
+        "--follow",
+        "--context=kind-dev",
+        "--namespace=shop",
+      ]);
+      t.follows[0].sink.onData("one\ntw");
+      t.follows[0].sink.onData("o\nthree\n");
+      await flushed();
+      expect(t.panel().logs).toMatchObject({
+        following: true,
+        lines: ["one", "two", "three"],
+      });
+
+      await t.host.execute("stop_logs");
+      expect(t.follows[0].stopped).toBe(true);
+      expect(t.panel().logs).toMatchObject({ following: false, lines: ["one", "two", "three"] });
+      await t.host.execute("stop_logs", { close: true });
+      expect(t.panel().logs).toBeNull();
+      await t.host.shutdown();
+    });
+
+    it("says why a followed log ended, and ignores a stream it replaced", async () => {
+      const t = start();
+      await t.host.handshake();
+      await settled(t.panel);
+
+      await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", follow: true });
+      await t.host.execute("pod_logs", { pod: "worker-5d8b-fghij", follow: true });
+      expect(t.follows[0].stopped).toBe(true);
+      t.follows[0].sink.onData("stale\n");
+      t.follows[1].sink.onData("fresh\n");
+      t.follows[1].sink.onEnd(null);
+      await flushed();
+      expect(t.panel().logs).toMatchObject({
+        pod: "worker-5d8b-fghij",
+        following: false,
+        lines: ["fresh"],
+        ended: "The container stopped writing logs: it exited or the pod is gone.",
+      });
+
+      await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", follow: true });
+      t.follows[2].sink.onEnd(new KubeError("unreachable", "dial tcp: i/o timeout"));
+      await flushed();
+      expect(t.panel().logs?.ended).toMatch(/^Cannot reach the cluster of "kind-dev"/);
+
+      await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", follow: true });
+      await t.host.shutdown();
+      expect(t.follows[3].stopped).toBe(true);
+    });
+
+    it("answers the agent without opening the panel's view, and never follows for it", async () => {
+      const t = start();
+      await t.host.handshake();
+      await settled(t.panel);
+
+      const agent = { initiator: "agent" } as const;
+      const answer = await t.host.execute("pod_logs", { pod: "worker-5d8b-fghij" }, agent);
+      expect(answer.result?.payload).toMatchObject({
+        container: "worker",
+        logs: "INFO starting worker\nERROR queue unreachable",
+        truncated: false,
+        following: false,
+      });
+      expect(t.panel().logs).toBeNull();
+
+      const follow = await t.host.execute(
+        "pod_logs",
+        { pod: "web-7f9c-abcde", follow: true },
+        agent,
+      );
+      expect(follow.error?.message).toMatch(/^the agent reads logs once/);
+      expect(t.follows).toHaveLength(0);
+      await t.host.shutdown();
+    });
+
+    it("refuses arguments kubectl should never see", async () => {
+      const t = start();
+      await t.host.handshake();
+      await settled(t.panel);
+
+      for (const [args, message] of [
+        [{}, /^pod is required: use the Logs button/],
+        [{ pod: "web-7f9c-abcde", container: "--all" }, /is not a container name/],
+        [{ pod: "web-7f9c-abcde", container: "db" }, /has no container "db"; it has web/],
+        [{ pod: "web-7f9c-abcde", tail_lines: 0 }, /^tail_lines must be a whole number/],
+        [{ pod: "web-7f9c-abcde", tail_lines: 5001 }, /^tail_lines must be a whole number/],
+        [{ pod: "web-7f9c-abcde", previous: "maybe" }, /^previous must be true or false/],
+        [{ pod: "web-7f9c-abcde", previous: true, follow: true }, /cannot be followed/],
+      ] as const) {
+        const refused = await t.host.execute("pod_logs", args);
+        expect(refused.error?.message).toMatch(message);
+      }
+      expect(t.fake.calls.some((c) => c[0] === "logs")).toBe(false);
+      await t.host.shutdown();
+    });
   });
 });

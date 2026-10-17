@@ -11,30 +11,65 @@
           "certificate-authority-data": "DATA+OMITTED"
         }
       },
-      { "name": "prod", "cluster": { "server": "https://prod.example.com" } }
+      {
+        "name": "prod",
+        "cluster": {
+          "server": "https://prod.example.com"
+        }
+      }
     ],
     "users": [
       {
         "name": "kind-dev",
-        "user": { "client-certificate-data": "DATA+OMITTED", "client-key-data": "DATA+OMITTED" }
+        "user": {
+          "client-certificate-data": "DATA+OMITTED",
+          "client-key-data": "DATA+OMITTED"
+        }
       },
-      { "name": "prod", "user": { "token": "REDACTED" } }
+      {
+        "name": "prod",
+        "user": {
+          "token": "REDACTED"
+        }
+      }
     ],
     "contexts": [
       {
         "name": "kind-dev",
-        "context": { "cluster": "kind-dev", "user": "kind-dev", "namespace": "shop" }
+        "context": {
+          "cluster": "kind-dev",
+          "user": "kind-dev",
+          "namespace": "shop"
+        }
       },
-      { "name": "prod", "context": { "cluster": "prod", "user": "prod" } }
+      {
+        "name": "prod",
+        "context": {
+          "cluster": "prod",
+          "user": "prod"
+        }
+      }
     ],
     "current-context": "kind-dev"
   },
   "namespaces": {
     "kind": "List",
     "items": [
-      { "metadata": { "name": "shop" } },
-      { "metadata": { "name": "default" } },
-      { "metadata": { "name": "kube-system" } }
+      {
+        "metadata": {
+          "name": "shop"
+        }
+      },
+      {
+        "metadata": {
+          "name": "default"
+        }
+      },
+      {
+        "metadata": {
+          "name": "kube-system"
+        }
+      }
     ]
   },
   "pods": {
@@ -45,9 +80,22 @@
           "metadata": {
             "name": "web-7f9c-abcde",
             "creationTimestamp": "2026-10-08T10:00:00Z",
-            "ownerReferences": [{ "kind": "ReplicaSet", "name": "web-7f9c", "controller": true }]
+            "ownerReferences": [
+              {
+                "kind": "ReplicaSet",
+                "name": "web-7f9c",
+                "controller": true
+              }
+            ]
           },
-          "spec": { "nodeName": "kind-control-plane", "containers": [{ "name": "web" }] },
+          "spec": {
+            "nodeName": "kind-control-plane",
+            "containers": [
+              {
+                "name": "web"
+              }
+            ]
+          },
           "status": {
             "phase": "Running",
             "containerStatuses": [
@@ -55,7 +103,11 @@
                 "name": "web",
                 "ready": true,
                 "restartCount": 0,
-                "state": { "running": { "startedAt": "2026-10-08T10:00:05Z" } }
+                "state": {
+                  "running": {
+                    "startedAt": "2026-10-08T10:00:05Z"
+                  }
+                }
               }
             ]
           }
@@ -64,36 +116,83 @@
           "metadata": {
             "name": "worker-5d8b-fghij",
             "creationTimestamp": "2026-10-07T12:00:00Z",
-            "ownerReferences": [{ "kind": "ReplicaSet", "name": "worker-5d8b", "controller": true }]
+            "ownerReferences": [
+              {
+                "kind": "ReplicaSet",
+                "name": "worker-5d8b",
+                "controller": true
+              }
+            ]
           },
           "spec": {
             "nodeName": "kind-control-plane",
-            "containers": [{ "name": "worker" }, { "name": "sidecar" }]
+            "containers": [
+              {
+                "name": "worker"
+              },
+              {
+                "name": "sidecar"
+              }
+            ]
           },
           "status": {
             "phase": "Running",
             "containerStatuses": [
-              { "name": "sidecar", "ready": true, "restartCount": 1, "state": { "running": {} } },
+              {
+                "name": "sidecar",
+                "ready": true,
+                "restartCount": 1,
+                "state": {
+                  "running": {}
+                }
+              },
               {
                 "name": "worker",
                 "ready": false,
                 "restartCount": 6,
-                "state": { "waiting": { "reason": "CrashLoopBackOff" } }
+                "state": {
+                  "waiting": {
+                    "reason": "CrashLoopBackOff"
+                  }
+                }
               }
             ]
           }
         },
         {
-          "metadata": { "name": "debug", "creationTimestamp": "2026-10-08T11:58:30Z" },
-          "spec": { "nodeName": "kind-control-plane", "containers": [{ "name": "shell" }] },
+          "metadata": {
+            "name": "debug",
+            "creationTimestamp": "2026-10-08T11:58:30Z"
+          },
+          "spec": {
+            "nodeName": "kind-control-plane",
+            "containers": [
+              {
+                "name": "shell"
+              }
+            ]
+          },
           "status": {
             "phase": "Running",
             "containerStatuses": [
-              { "name": "shell", "ready": true, "restartCount": 0, "state": { "running": {} } }
+              {
+                "name": "shell",
+                "ready": true,
+                "restartCount": 0,
+                "state": {
+                  "running": {}
+                }
+              }
             ]
           }
         }
       ]
     }
+  },
+  "logs": {
+    "shop/web-7f9c-abcde/web": "GET /health 200 1ms\nGET /health 200 2ms\nGET /health 200 3ms\nGET /health 200 4ms\nGET /health 200 5ms\nGET /health 200 6ms\nGET /health 200 7ms\nGET /health 200 8ms\nGET /health 200 9ms\nGET /health 200 10ms\nGET /health 200 11ms\nGET /health 200 12ms\nGET /health 200 13ms\nGET /health 200 14ms\nGET /health 200 15ms\nGET /health 200 16ms\nGET /health 200 17ms\nGET /health 200 18ms\nGET /health 200 19ms\nGET /health 200 20ms\nGET /health 200 21ms\nGET /health 200 22ms\nGET /health 200 23ms\nGET /health 200 24ms\nGET /health 200 25ms\nGET /health 200 26ms\nGET /health 200 27ms\nGET /health 200 28ms\nGET /health 200 29ms\nGET /health 200 30ms\nGET /health 200 31ms\nGET /health 200 32ms\nGET /health 200 33ms\nGET /health 200 34ms\nGET /health 200 35ms\nGET /health 200 36ms\nGET /health 200 37ms\nGET /health 200 38ms\nGET /health 200 39ms\nGET /health 200 40ms\nGET /health 200 41ms\nGET /health 200 42ms\nGET /health 200 43ms\nGET /health 200 44ms\nGET /health 200 45ms\nGET /health 200 46ms\nGET /health 200 47ms\nGET /health 200 48ms\nGET /health 200 49ms\nGET /health 200 50ms\nGET /health 200 51ms\nGET /health 200 52ms\nGET /health 200 53ms\nGET /health 200 54ms\nGET /health 200 55ms\nGET /health 200 56ms\nGET /health 200 57ms\nGET /health 200 58ms\nGET /health 200 59ms\nGET /health 200 60ms\nGET /health 200 61ms\nGET /health 200 62ms\nGET /health 200 63ms\nGET /health 200 64ms\nGET /health 200 65ms\nGET /health 200 66ms\nGET /health 200 67ms\nGET /health 200 68ms\nGET /health 200 69ms\nGET /health 200 70ms\nGET /health 200 71ms\nGET /health 200 72ms\nGET /health 200 73ms\nGET /health 200 74ms\nGET /health 200 75ms\nGET /health 200 76ms\nGET /health 200 77ms\nGET /health 200 78ms\nGET /health 200 79ms\nGET /health 200 80ms\nGET /health 200 81ms\nGET /health 200 82ms\nGET /health 200 83ms\nGET /health 200 84ms\nGET /health 200 85ms\nGET /health 200 86ms\nGET /health 200 87ms\nGET /health 200 88ms\nGET /health 200 89ms\nGET /health 200 90ms\nGET /health 200 91ms\nGET /health 200 92ms\nGET /health 200 93ms\nGET /health 200 94ms\nGET /health 200 95ms\nGET /health 200 96ms\nGET /health 200 97ms\nGET /health 200 98ms\nGET /health 200 99ms\nGET /health 200 100ms\nGET /health 200 101ms\nGET /health 200 102ms\nGET /health 200 103ms\nGET /health 200 104ms\nGET /health 200 105ms\nGET /health 200 106ms\nGET /health 200 107ms\nGET /health 200 108ms\nGET /health 200 109ms\nGET /health 200 110ms\nGET /health 200 111ms\nGET /health 200 112ms\nGET /health 200 113ms\nGET /health 200 114ms\nGET /health 200 115ms\nGET /health 200 116ms\nGET /health 200 117ms\nGET /health 200 118ms\nGET /health 200 119ms\nGET /health 200 120ms\nGET /health 200 121ms\nGET /health 200 122ms\nGET /health 200 123ms\nGET /health 200 124ms\nGET /health 200 125ms\nGET /health 200 126ms\nGET /health 200 127ms\nGET /health 200 128ms\nGET /health 200 129ms\nGET /health 200 130ms\nGET /health 200 131ms\nGET /health 200 132ms\nGET /health 200 133ms\nGET /health 200 134ms\nGET /health 200 135ms\nGET /health 200 136ms\nGET /health 200 137ms\nGET /health 200 138ms\nGET /health 200 139ms\nGET /health 200 140ms\nGET /health 200 141ms\nGET /health 200 142ms\nGET /health 200 143ms\nGET /health 200 144ms\nGET /health 200 145ms\nGET /health 200 146ms\nGET /health 200 147ms\nGET /health 200 148ms\nGET /health 200 149ms\nGET /health 200 150ms\n",
+    "shop/worker-5d8b-fghij/worker": "\u001b[32mINFO\u001b[0m starting worker\n\u001b[31mERROR\u001b[0m queue unreachable\n",
+    "shop/worker-5d8b-fghij/worker:previous": "INFO starting worker\npanic: queue unreachable\n",
+    "shop/worker-5d8b-fghij/sidecar": "proxy ready\n"
   }
 }

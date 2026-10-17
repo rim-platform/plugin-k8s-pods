@@ -172,6 +172,47 @@
       kbd {
         font-family: ui-monospace, monospace;
       }
+      td.actions button + button {
+        margin-left: 0.35rem;
+      }
+      #logs {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 3rem);
+      }
+      #logs[hidden] {
+        display: none;
+      }
+      .logs-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-rim-line);
+      }
+      #logs-title {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        word-break: break-all;
+      }
+      #logs-status {
+        padding: 0.35rem 0.75rem;
+        color: var(--color-rim-text-faint);
+        font-size: 11px;
+      }
+      #logs-text {
+        flex: 1;
+        margin: 0;
+        padding: 0.5rem 0.75rem;
+        overflow: auto;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-all;
+        background: var(--color-rim-void);
+      }
     </style>
   </head>
   <body>
@@ -218,10 +259,35 @@
       <tbody id="rows"></tbody>
     </table>
     <div id="empty" class="empty">Loading pods…</div>
-    <footer>
+    <section id="logs" aria-label="Pod logs" hidden>
+      <div class="logs-bar">
+        <button id="logs-close" type="button" title="Back to the pods (Esc)">← Pods</button>
+        <span id="logs-title"></span>
+        <label
+          >Container
+          <select id="logs-container" aria-label="Container"></select
+        ></label>
+        <label
+          >Lines
+          <select id="logs-lines" aria-label="Lines">
+            <option value="100">100</option>
+            <option value="500">500</option>
+            <option value="1000">1000</option>
+            <option value="5000">5000</option>
+          </select></label
+        >
+        <label><input id="logs-previous" type="checkbox" /> Previous run (p)</label>
+        <label><input id="logs-follow" type="checkbox" /> Follow (f)</label>
+        <span class="spacer"></span>
+        <button id="logs-reload" type="button" title="Read the logs again (r)">Reload</button>
+      </div>
+      <div id="logs-status" aria-live="polite"></div>
+      <pre id="logs-text"></pre>
+    </section>
+    <footer id="footer">
       <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>r</kbd> refresh · <kbd>/</kbd> filter ·
-      <kbd>x</kbd> restart the selected pod (asks first) · kubectl runs on this device with your
-      kubeconfig; credentials stay here.
+      <kbd>l</kbd> logs · <kbd>x</kbd> restart the selected pod (asks first) · kubectl runs on this
+      device with your kubeconfig; credentials stay here.
     </footer>
     <script src="app.js"></script>
   </body>
