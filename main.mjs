@@ -943,7 +943,7 @@ function classify(stderr) {
 function firstErrorLine(text2) {
   const lines = text2.split(/\r?\n/).map((line2) => line2.trim());
   const line = lines.find((l) => /^error/i.test(l)) ?? lines.find((l) => l.length > 0) ?? "kubectl failed";
-  const clean = line.replace(/^error(:\s*)?/i, "").trim() || line;
+  const clean = line.replace(/^error(\s+from server(\s*\([^)]*\))?)?(:\s*)?/i, "").trim() || line;
   return clean.length > MAX_DETAIL_LENGTH ? `${clean.slice(0, MAX_DETAIL_LENGTH)}\u2026` : clean;
 }
 async function readConfig(kubectl) {
@@ -1015,6 +1015,22 @@ async function deletePod(kubectl, context, namespace, pod) {
     REQUEST_TIMEOUT
   ]);
 }
+var MAX_LOG_BYTES = 256 * 1024;
+function logArgs(context, namespace, pod, request, follow) {
+  return [
+    "logs",
+    pod,
+    `--container=${request.container}`,
+    `--tail=${request.tailLines}`,
+    ...request.previous ? ["--previous"] : [],
+    ...follow ? ["--follow"] : [`--limit-bytes=${MAX_LOG_BYTES}`, REQUEST_TIMEOUT],
+    `--context=${context}`,
+    `--namespace=${namespace}`
+  ];
+}
+async function getLogs(kubectl, context, namespace, pod, request) {
+  return kubectl(logArgs(context, namespace, pod, request, false));
+}
 function parseJson(text2) {
   try {
     return asRecord(JSON.parse(text2));
@@ -1027,6 +1043,83 @@ function asRecord(value) {
 }
 function asArray(value) {
   return Array.isArray(value) ? value.map(asRecord) : [];
+}
+
+// src/logs.ts
+import { spawn } from "node:child_process";
+var MAX_LOG_LINES = 5e3;
+var MAX_LOG_VIEW_BYTES = 256 * 1024;
+var MAX_LINE_LENGTH = 4096;
+var MAX_STDERR_BYTES = 4096;
+var ESCAPES = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g;
+var CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g;
+function cleanLine(line) {
+  const plain = line.replace(ESCAPES, "").replace(CONTROL, "");
+  return plain.length > MAX_LINE_LENGTH ? `${plain.slice(0, MAX_LINE_LENGTH)}\u2026` : plain;
+}
+var LineBuffer = class {
+  kept = [];
+  bytes = 0;
+  partial = "";
+  /** Lines dropped from the start to stay within the limits. */
+  dropped = 0;
+  /** Add output as it arrives; a line is kept once its newline has arrived. */
+  push(chunk) {
+    const parts = (this.partial + chunk).split(/\r?\n/);
+    this.partial = parts.pop() ?? "";
+    for (const part of parts) this.add(part);
+  }
+  /** Keep the last unterminated line, as when the output ends. */
+  end() {
+    if (this.partial.length > 0) this.add(this.partial);
+    this.partial = "";
+  }
+  get lines() {
+    return this.kept;
+  }
+  add(raw) {
+    const line = cleanLine(raw);
+    this.kept.push(line);
+    this.bytes += line.length + 1;
+    while (this.kept.length > MAX_LOG_LINES || this.bytes > MAX_LOG_VIEW_BYTES) {
+      this.bytes -= this.kept.shift().length + 1;
+      this.dropped++;
+    }
+  }
+};
+function systemFollow(binary = findKubectl()) {
+  return (args, sink) => {
+    let stopped = false;
+    let stderr = "";
+    const child = spawn(binary, [...args], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (!stopped) sink.onData(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < MAX_STDERR_BYTES) stderr += chunk;
+    });
+    const end = (error) => {
+      if (stopped) return;
+      stopped = true;
+      sink.onEnd(error);
+    };
+    child.on("error", (error) => {
+      end(
+        error.code === "ENOENT" ? new KubeError("kubectl_missing", `${binary} was not found`) : new KubeError("failed", error.message)
+      );
+    });
+    child.on("close", (code) => end(code === 0 ? null : classify(stderr || `exit code ${code}`)));
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      child.kill();
+    };
+  };
 }
 
 // src/pods.ts
@@ -1124,6 +1217,18 @@ function podColumns(pod) {
   }
   return { status: reason, readyCount, containerCount, restarts };
 }
+function containersOf(pod) {
+  const spec = asRecord(pod.spec);
+  return [...asArray(spec.initContainers), ...asArray(spec.containers)].map((c) => text(c.name)).filter((name) => name.length > 0);
+}
+function defaultContainer(pod) {
+  const annotated = text(
+    asRecord(asRecord(pod.metadata).annotations)["kubectl.kubernetes.io/default-container"]
+  );
+  if (annotated && containersOf(pod).includes(annotated)) return annotated;
+  const first = asArray(asRecord(pod.spec).containers).map((c) => text(c.name)).find((name) => name.length > 0);
+  return first ?? null;
+}
 function controllerOf(pod) {
   const owner = asArray(asRecord(pod.metadata).ownerReferences).find((o) => o.controller === true);
   if (!owner || typeof owner.kind !== "string" || typeof owner.name !== "string") return null;
@@ -1162,7 +1267,10 @@ var MAX_INTERVAL_SECONDS = 3600;
 var MAX_PANEL_PODS = 2e3;
 var MAX_PAYLOAD_PODS = 500;
 var MAX_FILTER_LENGTH = 100;
+var DEFAULT_LOG_LINES = 100;
+var LOG_FLUSH_MS = 250;
 var NAMESPACE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
+var CONTAINER_NAME = NAMESPACE;
 var POD_NAME = /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/;
 var defaultEvery = (ms, run) => {
   const timer = setInterval(run, ms);
@@ -1172,6 +1280,8 @@ function createPlugin(options = {}) {
   const kubectl = options.kubectl ?? systemKubectl();
   const now = options.now ?? (() => /* @__PURE__ */ new Date());
   const every = options.every ?? defaultEvery;
+  const follow = options.follow ?? systemFollow();
+  const logFlushMs = options.logFlushMs ?? LOG_FLUSH_MS;
   let state = {
     contexts: [],
     context: null,
@@ -1184,7 +1294,9 @@ function createPlugin(options = {}) {
     fetchedAt: null,
     loading: false,
     error: null,
-    lastAction: null
+    lastAction: null,
+    logs: null,
+    logTailLines: DEFAULT_LOG_LINES
   };
   let allPods = [];
   const namespaceCache = /* @__PURE__ */ new Map();
@@ -1194,11 +1306,23 @@ function createPlugin(options = {}) {
   };
   let inFlight = null;
   let queued = null;
+  let stopFollow = () => {
+  };
+  let logFlush = null;
+  let logSession = 0;
   async function publish(patch) {
     state = { ...state, ...patch };
+    await toPanel((ready) => ready.panels.set(PANEL_ID, state));
+  }
+  async function publishLogs(patch) {
+    const logs = patch === null || !state.logs ? null : { ...state.logs, ...patch };
+    state = { ...state, logs };
+    await toPanel((ready) => ready.panels.patch(PANEL_ID, { logs }));
+  }
+  async function toPanel(update) {
     if (!host || panelDenied) return;
     try {
-      await host.panels.set(PANEL_ID, state);
+      await update(host);
     } catch (error) {
       if (error instanceof HostRequestError && error.code === ErrorCode.CAPABILITY_DENIED) {
         panelDenied = true;
@@ -1219,17 +1343,16 @@ function createPlugin(options = {}) {
     const config = await readConfig(kubectl);
     const keep = state.context !== null && config.contexts.includes(state.context);
     const context = keep ? state.context : config.current ?? config.contexts[0];
-    const namespace = keep && state.namespace ? state.namespace : config.namespaces[context] ?? "default";
+    const namespace = (keep || state.context === null) && state.namespace ? state.namespace : config.namespaces[context] ?? "default";
     return { config, context, namespace };
   }
   async function load() {
+    const asked = { context: state.context, namespace: state.namespace };
+    let where = asked;
     await publish({ loading: true });
-    let where = {
-      context: state.context,
-      namespace: state.namespace
-    };
     try {
       const { config, context, namespace } = await resolveSelection();
+      if (state.context !== asked.context || state.namespace !== asked.namespace) return state;
       where = { context, namespace };
       await publish({ contexts: config.contexts, context, namespace });
       if (!namespaceCache.has(context)) {
@@ -1280,6 +1403,15 @@ function createPlugin(options = {}) {
       });
     }
   }
+  async function targetOf(contextArg, namespaceArg) {
+    const config = await readConfig(kubectl);
+    const context = contextArg ?? state.context ?? config.current ?? config.contexts[0];
+    if (!config.contexts.includes(context)) {
+      throw invalid(`context "${context}" is not in your kubeconfig`);
+    }
+    const namespace = namespaceArg ?? (context === state.context ? state.namespace : null) ?? config.namespaces[context] ?? "default";
+    return { context, namespace };
+  }
   function listingResult(listed) {
     if (listed.error) {
       throw new PluginError(listed.error.message, { data: { reason: listed.error.kind } });
@@ -1308,18 +1440,16 @@ function createPlugin(options = {}) {
     commands: {
       refresh: {
         async run() {
+          namespaceCache.clear();
           return listingResult(await refresh());
         }
       },
       filter: {
         async run({ args }) {
           const text2 = optionalString(args.text, "text", MAX_FILTER_LENGTH);
-          const namespace = optionalString(args.namespace, "namespace", 63);
+          const namespace = optionalNamespace(args.namespace);
           const context = optionalString(args.context, "context", 253);
           const interval = optionalInterval(args.interval_seconds);
-          if (namespace !== void 0 && !NAMESPACE.test(namespace)) {
-            throw invalid(`"${namespace}" is not a namespace name`);
-          }
           if (context !== void 0) {
             const config = await readConfig(kubectl).catch((error) => {
               throw toPluginError(error, null, null);
@@ -1345,21 +1475,16 @@ function createPlugin(options = {}) {
       restart_pod: {
         dangerous: true,
         async run({ args }) {
-          const pod = requiredName(args.pod);
-          const namespaceArg = optionalString(args.namespace, "namespace", 63);
+          const pod = requiredName(
+            args.pod,
+            "use the Restart button next to a pod in the Pods panel"
+          );
           const contextArg = optionalString(args.context, "context", 253);
-          if (namespaceArg !== void 0 && !NAMESPACE.test(namespaceArg)) {
-            throw invalid(`"${namespaceArg}" is not a namespace name`);
-          }
+          const namespaceArg = optionalNamespace(args.namespace);
           let context = contextArg ?? state.context;
           let namespace = namespaceArg ?? null;
           try {
-            const config = await readConfig(kubectl);
-            context ??= config.current ?? config.contexts[0];
-            if (!config.contexts.includes(context)) {
-              throw invalid(`context "${context}" is not in your kubeconfig`);
-            }
-            namespace ??= (context === state.context ? state.namespace : null) ?? config.namespaces[context] ?? "default";
+            ({ context, namespace } = await targetOf(contextArg, namespaceArg));
             const controller = controllerOf(await getPod(kubectl, context, namespace, pod));
             if (!controller) {
               throw new PluginError(
@@ -1392,6 +1517,115 @@ function createPlugin(options = {}) {
             throw failure;
           }
         }
+      },
+      pod_logs: {
+        async run({ args, initiator }) {
+          const pod = requiredName(args.pod, "use the Logs button next to a pod in the Pods panel");
+          const contextArg = optionalString(args.context, "context", 253);
+          const namespaceArg = optionalNamespace(args.namespace);
+          const containerArg = optionalString(args.container, "container", 63);
+          if (containerArg !== void 0 && !CONTAINER_NAME.test(containerArg)) {
+            throw invalid(`"${containerArg}" is not a container name`);
+          }
+          const previous = optionalBoolean(args.previous, "previous") ?? false;
+          const following = optionalBoolean(args.follow, "follow") ?? false;
+          const tailLines = optionalTailLines(args.tail_lines) ?? state.logTailLines;
+          if (following && previous) {
+            throw invalid("the previous run has ended, so its logs cannot be followed");
+          }
+          const forAgent = initiator === "agent";
+          if (forAgent && following) {
+            throw invalid("the agent reads logs once; following them is for the Pods panel");
+          }
+          let context = contextArg ?? state.context;
+          let namespace = namespaceArg ?? null;
+          const session = forAgent ? logSession : ++logSession;
+          if (!forAgent) {
+            closeFollow();
+            await publish({
+              logTailLines: tailLines,
+              logs: {
+                pod,
+                namespace: namespaceArg ?? state.namespace ?? "",
+                context: context ?? "",
+                container: containerArg ?? "",
+                containers: [],
+                previous,
+                tailLines,
+                following,
+                loading: true,
+                lines: [],
+                dropped: 0,
+                error: null,
+                ended: null
+              }
+            });
+          }
+          try {
+            ({ context, namespace } = await targetOf(contextArg, namespaceArg));
+            const found = await getPod(kubectl, context, namespace, pod);
+            const containers = containersOf(found);
+            const container = containerArg ?? defaultContainer(found);
+            if (container === null) {
+              throw new PluginError(`${pod} has no containers`, {
+                data: { reason: "no_container" }
+              });
+            }
+            if (!containers.includes(container)) {
+              throw invalid(
+                `${pod} has no container "${container}"; it has ${containers.join(", ")}`
+              );
+            }
+            const request = { container, tailLines, previous };
+            const where = { pod, namespace, context, container, containers, previous, tailLines };
+            const run = previous ? "previous run of " : "";
+            if (following) {
+              if (session !== logSession) return { payload: { ...where, following, logs: "" } };
+              startFollow(session, logArgs(context, namespace, pod, request, true));
+              await publishLogs({ ...where, loading: false });
+              return {
+                payload: { ...where, following, logs: "", truncated: false },
+                message: `Following ${container} in ${pod}`
+              };
+            }
+            const text2 = await getLogs(kubectl, context, namespace, pod, request);
+            const buffer = new LineBuffer();
+            buffer.push(text2);
+            buffer.end();
+            const lines = buffer.lines;
+            const truncated = buffer.dropped > 0 || Buffer.byteLength(text2, "utf8") >= MAX_LOG_BYTES;
+            if (!forAgent && session === logSession) {
+              await publishLogs({ ...where, loading: false, lines, dropped: buffer.dropped });
+            }
+            return {
+              payload: { ...where, following, logs: lines.join("\n"), truncated },
+              message: lines.length === 0 ? `No logs from the ${run}${container} in ${pod}` : `Last ${lines.length} line${lines.length === 1 ? "" : "s"} from the ${run}${container} in ${pod}`
+            };
+          } catch (error) {
+            const failure = toPluginError(error, context, namespace);
+            if (!forAgent && session === logSession) {
+              await publishLogs({
+                loading: false,
+                following: false,
+                error: { kind: reasonOf(failure), message: failure.message }
+              });
+            }
+            throw failure;
+          }
+        }
+      },
+      stop_logs: {
+        async run({ args }) {
+          const close = optionalBoolean(args.close, "close") ?? false;
+          closeFollow();
+          if (close) {
+            logSession++;
+            await publishLogs(null);
+            return { message: "Closed the logs" };
+          }
+          if (state.logs?.following) await publishLogs({ following: false });
+          return { message: "Stopped following the logs" };
+        }
       }
     },
     async onReady(ready) {
@@ -1402,9 +1636,46 @@ function createPlugin(options = {}) {
     },
     onShutdown() {
       stopTimer();
+      closeFollow();
       host = null;
     }
   });
+  function startFollow(session, args) {
+    const buffer = new LineBuffer();
+    const flush = () => {
+      logFlush = null;
+      if (session !== logSession) return;
+      void publishLogs({ lines: buffer.lines, dropped: buffer.dropped });
+    };
+    stopFollow = follow(args, {
+      onData(chunk) {
+        buffer.push(chunk);
+        logFlush ??= setTimeout(flush, logFlushMs);
+      },
+      onEnd(error) {
+        buffer.end();
+        if (logFlush) clearTimeout(logFlush);
+        logFlush = null;
+        stopFollow = () => {
+        };
+        if (session !== logSession) return;
+        const ended = error ? describe(error, state.logs?.context ?? null, state.logs?.namespace ?? null).message : "The container stopped writing logs: it exited or the pod is gone.";
+        void publishLogs({
+          lines: buffer.lines,
+          dropped: buffer.dropped,
+          following: false,
+          ended
+        });
+      }
+    });
+  }
+  function closeFollow() {
+    stopFollow();
+    stopFollow = () => {
+    };
+    if (logFlush) clearTimeout(logFlush);
+    logFlush = null;
+  }
   function action(pod, namespace, context, ok, message) {
     return { pod, namespace, context, ok, message, at: now().toISOString() };
   }
@@ -1442,6 +1713,10 @@ function toPluginError(error, context, namespace) {
   const described = describe(error, context, namespace);
   return new PluginError(described.message, { data: { reason: described.kind } });
 }
+function reasonOf(error) {
+  const reason = error.data?.reason;
+  return typeof reason === "string" ? reason : "failed";
+}
 function invalid(message) {
   return new PluginError(message, { code: ErrorCode.INVALID_PARAMS });
 }
@@ -1451,14 +1726,36 @@ function optionalString(value, name, maxLength) {
   if (value.length > maxLength) throw invalid(`${name} is longer than ${maxLength} characters`);
   return value;
 }
-function requiredName(value) {
+function requiredName(value, hint) {
   if (value === void 0 || value === null || value === "") {
-    throw invalid("pod is required: use the Restart button next to a pod in the Pods panel");
+    throw invalid(`pod is required: ${hint}`);
   }
   if (typeof value !== "string" || !POD_NAME.test(value)) {
     throw invalid(`"${String(value)}" is not a pod name`);
   }
   return value;
+}
+function optionalNamespace(value) {
+  const namespace = optionalString(value, "namespace", 63);
+  if (namespace !== void 0 && !NAMESPACE.test(namespace)) {
+    throw invalid(`"${namespace}" is not a namespace name`);
+  }
+  return namespace;
+}
+function optionalBoolean(value, name) {
+  if (value === void 0 || value === null || value === "") return void 0;
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw invalid(`${name} must be true or false`);
+}
+function optionalTailLines(value) {
+  if (value === void 0 || value === null || value === "") return void 0;
+  const lines = typeof value === "string" ? Number(value) : value;
+  if (typeof lines !== "number" || !Number.isInteger(lines) || lines < 1 || lines > MAX_LOG_LINES) {
+    throw invalid(`tail_lines must be a whole number from 1 to ${MAX_LOG_LINES}`);
+  }
+  return lines;
 }
 function optionalInterval(value) {
   if (value === void 0 || value === null || value === "") return void 0;

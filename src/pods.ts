@@ -142,6 +142,30 @@ function podColumns(pod: Record<string, unknown>): PodColumns {
   return { status: reason, readyCount, containerCount, restarts };
 }
 
+/** Container names of a pod, init containers and sidecars first, as they start. */
+export function containersOf(pod: Record<string, unknown>): string[] {
+  const spec = asRecord(pod.spec);
+  return [...asArray(spec.initContainers), ...asArray(spec.containers)]
+    .map((c) => text(c.name))
+    .filter((name) => name.length > 0);
+}
+
+/**
+ * The container `kubectl logs` reads when none is named: the one the
+ * `kubectl.kubernetes.io/default-container` annotation names, else the first app
+ * container.
+ */
+export function defaultContainer(pod: Record<string, unknown>): string | null {
+  const annotated = text(
+    asRecord(asRecord(pod.metadata).annotations)["kubectl.kubernetes.io/default-container"],
+  );
+  if (annotated && containersOf(pod).includes(annotated)) return annotated;
+  const first = asArray(asRecord(pod.spec).containers)
+    .map((c) => text(c.name))
+    .find((name) => name.length > 0);
+  return first ?? null;
+}
+
 /** `ReplicaSet/web-7f9c` for the owner that recreates the pod, or `null` for a bare pod. */
 export function controllerOf(pod: Record<string, unknown>): string | null {
   const owner = asArray(asRecord(pod.metadata).ownerReferences).find((o) => o.controller === true);

@@ -185,5 +185,8 @@ describe("classify", () => {
     expect(classify('I1008 warning\nerror: context "a" does not exist\nmore').detail).toBe(
       'context "a" does not exist',
     );
+    expect(classify('Error from server (NotFound): pods "web" not found').detail).toBe(
+      'pods "web" not found',
+    );
   });
 });

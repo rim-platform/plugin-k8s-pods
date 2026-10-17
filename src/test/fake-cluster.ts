@@ -88,6 +88,29 @@ export function answer(args: readonly string[], scenario: Scenario, cluster: Jso
     if (index < 0) return fail(`Error from server (NotFound): pods "${args[2]}" not found`);
     return ok(items[index]);
   }
+  if (args[0] === "logs") {
+    const pod = args[1];
+    if (find(pod) < 0) return fail(`Error from server (NotFound): pods "${pod}" not found`);
+    const container = flag("container") ?? "";
+    const previous = args.includes("--previous");
+    const logs = cluster.logs as Record<string, string>;
+    const text = logs[`${namespace}/${pod}/${container}${previous ? ":previous" : ""}`];
+    if (text === undefined) {
+      return previous
+        ? fail(
+            `Error from server (BadRequest): previous terminated container "${container}" in pod "${pod}" not found`,
+          )
+        : ok("");
+    }
+    const tail = Number(flag("tail") ?? "-1");
+    const lines = text.split("\n").slice(0, -1);
+    return ok(
+      lines
+        .slice(tail < 0 ? 0 : -tail)
+        .map((line) => `${line}\n`)
+        .join(""),
+    );
+  }
   if (args[0] === "delete" && args[1] === "pod") {
     const index = find(args[2]);
     if (index < 0) return fail(`Error from server (NotFound): pods "${args[2]}" not found`);

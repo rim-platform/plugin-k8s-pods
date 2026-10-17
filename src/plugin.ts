@@ -1,7 +1,7 @@
 // The Kubernetes pods plugin: lists the pods of one namespace in a panel,
-// refreshes them on an interval and on demand, and restarts a pod after the
-// user confirms. kubectl runs on this device with the user's kubeconfig, so
-// cluster credentials never leave it.
+// refreshes them on an interval and on demand, shows and follows a container's
+// logs, and restarts a pod after the user confirms. kubectl runs on this device
+// with the user's kubeconfig, so cluster credentials never leave it.
 
 import {
   definePlugin,
@@ -13,17 +13,27 @@ import {
 
 import {
   deletePod,
+  getLogs,
   getPod,
   getPods,
   KubeError,
   listNamespaces,
+  logArgs,
+  MAX_LOG_BYTES,
   readConfig,
   systemKubectl,
   type KubeConfig,
   type KubeErrorKind,
   type Kubectl,
 } from "./kubectl.ts";
-import { controllerOf, summarizePods, type PodSummary } from "./pods.ts";
+import { LineBuffer, MAX_LOG_LINES, systemFollow, type Follow } from "./logs.ts";
+import {
+  containersOf,
+  controllerOf,
+  defaultContainer,
+  summarizePods,
+  type PodSummary,
+} from "./pods.ts";
 
 export const PLUGIN_ID = "chat.rim.k8s-pods";
 export const PANEL_ID = "pods";
@@ -36,8 +46,12 @@ const MAX_PANEL_PODS = 2000;
 /** Pods returned to the palette or the agent in one answer. */
 const MAX_PAYLOAD_PODS = 500;
 const MAX_FILTER_LENGTH = 100;
+export const DEFAULT_LOG_LINES = 100;
+/** How often streamed log lines reach the panel. */
+const LOG_FLUSH_MS = 250;
 
 const NAMESPACE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
+const CONTAINER_NAME = NAMESPACE;
 const POD_NAME = /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/;
 
 /** A failure the panel shows in place of the pod list. */
@@ -58,6 +72,27 @@ export interface LastAction {
   readonly at: string;
 }
 
+/** The log view: one container's lines, read once or followed as they arrive. */
+export interface LogView {
+  readonly pod: string;
+  readonly namespace: string;
+  readonly context: string;
+  /** Empty until the pod has been read. */
+  readonly container: string;
+  readonly containers: readonly string[];
+  readonly previous: boolean;
+  readonly tailLines: number;
+  /** kubectl is streaming new lines. */
+  readonly following: boolean;
+  readonly loading: boolean;
+  readonly lines: readonly string[];
+  /** Older lines dropped to keep the view within its limits. */
+  readonly dropped: number;
+  readonly error: PanelError | null;
+  /** Why following stopped by itself, e.g. the container exited. */
+  readonly ended: string | null;
+}
+
 /** Everything the panel renders. Sent whole with `host.panels.set` on each change. */
 export interface PanelState {
   readonly contexts: readonly string[];
@@ -75,6 +110,10 @@ export interface PanelState {
   readonly loading: boolean;
   readonly error: PanelError | null;
   readonly lastAction: LastAction | null;
+  /** The open log view, or `null`. */
+  readonly logs: LogView | null;
+  /** Lines a log view starts with when none are asked for: the last ones chosen. */
+  readonly logTailLines: number;
 }
 
 /** Calls `run` every `ms` milliseconds until the returned function is called. */
@@ -86,6 +125,10 @@ export interface K8sPodsOptions {
   readonly now?: () => Date;
   /** Defaults to `setInterval`. */
   readonly every?: Every;
+  /** Defaults to `kubectl logs --follow` on this device. */
+  readonly follow?: Follow;
+  /** Defaults to 250 ms. */
+  readonly logFlushMs?: number;
 }
 
 const defaultEvery: Every = (ms, run) => {
@@ -98,6 +141,8 @@ export function createPlugin(options: K8sPodsOptions = {}) {
   const kubectl = options.kubectl ?? systemKubectl();
   const now = options.now ?? (() => new Date());
   const every = options.every ?? defaultEvery;
+  const follow = options.follow ?? systemFollow();
+  const logFlushMs = options.logFlushMs ?? LOG_FLUSH_MS;
 
   let state: PanelState = {
     contexts: [],
@@ -112,6 +157,8 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     loading: false,
     error: null,
     lastAction: null,
+    logs: null,
+    logTailLines: DEFAULT_LOG_LINES,
   };
   let allPods: PodSummary[] = [];
   /** Namespaces per context, listed once per context. */
@@ -121,12 +168,28 @@ export function createPlugin(options: K8sPodsOptions = {}) {
   let stopTimer: () => void = () => {};
   let inFlight: Promise<PanelState> | null = null;
   let queued: Promise<PanelState> | null = null;
+  /** Stops the followed log, if one runs. */
+  let stopFollow: () => void = () => {};
+  let logFlush: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped for each log view, so output of an older one is ignored. */
+  let logSession = 0;
 
   async function publish(patch: Partial<PanelState>): Promise<void> {
     state = { ...state, ...patch };
+    await toPanel((ready) => ready.panels.set(PANEL_ID, state));
+  }
+
+  /** Change the log view alone, without sending the pods again. */
+  async function publishLogs(patch: Partial<LogView> | null): Promise<void> {
+    const logs = patch === null || !state.logs ? null : { ...state.logs, ...patch };
+    state = { ...state, logs };
+    await toPanel((ready) => ready.panels.patch(PANEL_ID, { logs }));
+  }
+
+  async function toPanel(update: (ready: Host) => Promise<void>): Promise<void> {
     if (!host || panelDenied) return;
     try {
-      await host.panels.set(PANEL_ID, state);
+      await update(host);
     } catch (error) {
       if (error instanceof HostRequestError && error.code === ErrorCode.CAPABILITY_DENIED) {
         panelDenied = true;
@@ -156,19 +219,22 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     const config = await readConfig(kubectl);
     const keep = state.context !== null && config.contexts.includes(state.context);
     const context = keep ? (state.context as string) : (config.current ?? config.contexts[0]);
+    // A namespace picked before any context was resolved applies to the current one.
     const namespace =
-      keep && state.namespace ? state.namespace : (config.namespaces[context] ?? "default");
+      (keep || state.context === null) && state.namespace
+        ? state.namespace
+        : (config.namespaces[context] ?? "default");
     return { config, context, namespace };
   }
 
   async function load(): Promise<PanelState> {
+    const asked = { context: state.context, namespace: state.namespace };
+    let where: { context: string | null; namespace: string | null } = asked;
     await publish({ loading: true });
-    let where: { context: string | null; namespace: string | null } = {
-      context: state.context,
-      namespace: state.namespace,
-    };
     try {
       const { config, context, namespace } = await resolveSelection();
+      // A pick made while the kubeconfig was read is the queued listing's to resolve.
+      if (state.context !== asked.context || state.namespace !== asked.namespace) return state;
       where = { context, namespace };
       await publish({ contexts: config.contexts, context, namespace });
       if (!namespaceCache.has(context)) {
@@ -226,6 +292,27 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     }
   }
 
+  /**
+   * The context and namespace a pod command acts in: the ones given, else the
+   * panel's, else the kubeconfig's.
+   */
+  async function targetOf(
+    contextArg: string | undefined,
+    namespaceArg: string | undefined,
+  ): Promise<{ context: string; namespace: string }> {
+    const config = await readConfig(kubectl);
+    const context = contextArg ?? state.context ?? config.current ?? config.contexts[0];
+    if (!config.contexts.includes(context)) {
+      throw invalid(`context "${context}" is not in your kubeconfig`);
+    }
+    const namespace =
+      namespaceArg ??
+      (context === state.context ? state.namespace : null) ??
+      config.namespaces[context] ??
+      "default";
+    return { context, namespace };
+  }
+
   /** The answer of `refresh` and `filter`, or the panel's error as a command failure. */
   function listingResult(listed: PanelState) {
     if (listed.error) {
@@ -259,18 +346,17 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     commands: {
       refresh: {
         async run() {
+          // Asked for by hand, so namespaces created since are listed too.
+          namespaceCache.clear();
           return listingResult(await refresh());
         },
       },
       filter: {
         async run({ args }) {
           const text = optionalString(args.text, "text", MAX_FILTER_LENGTH);
-          const namespace = optionalString(args.namespace, "namespace", 63);
+          const namespace = optionalNamespace(args.namespace);
           const context = optionalString(args.context, "context", 253);
           const interval = optionalInterval(args.interval_seconds);
-          if (namespace !== undefined && !NAMESPACE.test(namespace)) {
-            throw invalid(`"${namespace}" is not a namespace name`);
-          }
           if (context !== undefined) {
             const config = await readConfig(kubectl).catch((error: unknown) => {
               throw toPluginError(error, null, null);
@@ -301,26 +387,17 @@ export function createPlugin(options: K8sPodsOptions = {}) {
       restart_pod: {
         dangerous: true,
         async run({ args }) {
-          const pod = requiredName(args.pod);
-          const namespaceArg = optionalString(args.namespace, "namespace", 63);
+          const pod = requiredName(
+            args.pod,
+            "use the Restart button next to a pod in the Pods panel",
+          );
           const contextArg = optionalString(args.context, "context", 253);
-          if (namespaceArg !== undefined && !NAMESPACE.test(namespaceArg)) {
-            throw invalid(`"${namespaceArg}" is not a namespace name`);
-          }
+          const namespaceArg = optionalNamespace(args.namespace);
 
           let context = contextArg ?? state.context;
           let namespace = namespaceArg ?? null;
           try {
-            const config = await readConfig(kubectl);
-            context ??= config.current ?? config.contexts[0];
-            if (!config.contexts.includes(context)) {
-              throw invalid(`context "${context}" is not in your kubeconfig`);
-            }
-            namespace ??=
-              (context === state.context ? state.namespace : null) ??
-              config.namespaces[context] ??
-              "default";
-
+            ({ context, namespace } = await targetOf(contextArg, namespaceArg));
             const controller = controllerOf(await getPod(kubectl, context, namespace, pod));
             if (!controller) {
               throw new PluginError(
@@ -357,6 +434,123 @@ export function createPlugin(options: K8sPodsOptions = {}) {
           }
         },
       },
+      pod_logs: {
+        async run({ args, initiator }) {
+          const pod = requiredName(args.pod, "use the Logs button next to a pod in the Pods panel");
+          const contextArg = optionalString(args.context, "context", 253);
+          const namespaceArg = optionalNamespace(args.namespace);
+          const containerArg = optionalString(args.container, "container", 63);
+          if (containerArg !== undefined && !CONTAINER_NAME.test(containerArg)) {
+            throw invalid(`"${containerArg}" is not a container name`);
+          }
+          const previous = optionalBoolean(args.previous, "previous") ?? false;
+          const following = optionalBoolean(args.follow, "follow") ?? false;
+          const tailLines = optionalTailLines(args.tail_lines) ?? state.logTailLines;
+          if (following && previous) {
+            throw invalid("the previous run has ended, so its logs cannot be followed");
+          }
+          // The agent reads logs as an answer; only a person's request opens the view.
+          const forAgent = initiator === "agent";
+          if (forAgent && following) {
+            throw invalid("the agent reads logs once; following them is for the Pods panel");
+          }
+
+          let context: string | null = contextArg ?? state.context;
+          let namespace: string | null = namespaceArg ?? null;
+          const session = forAgent ? logSession : ++logSession;
+          if (!forAgent) {
+            closeFollow();
+            await publish({
+              logTailLines: tailLines,
+              logs: {
+                pod,
+                namespace: namespaceArg ?? state.namespace ?? "",
+                context: context ?? "",
+                container: containerArg ?? "",
+                containers: [],
+                previous,
+                tailLines,
+                following,
+                loading: true,
+                lines: [],
+                dropped: 0,
+                error: null,
+                ended: null,
+              },
+            });
+          }
+          try {
+            ({ context, namespace } = await targetOf(contextArg, namespaceArg));
+            const found = await getPod(kubectl, context, namespace, pod);
+            const containers = containersOf(found);
+            const container = containerArg ?? defaultContainer(found);
+            if (container === null) {
+              throw new PluginError(`${pod} has no containers`, {
+                data: { reason: "no_container" },
+              });
+            }
+            if (!containers.includes(container)) {
+              throw invalid(
+                `${pod} has no container "${container}"; it has ${containers.join(", ")}`,
+              );
+            }
+            const request = { container, tailLines, previous };
+            const where = { pod, namespace, context, container, containers, previous, tailLines };
+            const run = previous ? "previous run of " : "";
+
+            if (following) {
+              if (session !== logSession) return { payload: { ...where, following, logs: "" } };
+              startFollow(session, logArgs(context, namespace, pod, request, true));
+              await publishLogs({ ...where, loading: false });
+              return {
+                payload: { ...where, following, logs: "", truncated: false },
+                message: `Following ${container} in ${pod}`,
+              };
+            }
+
+            const text = await getLogs(kubectl, context, namespace, pod, request);
+            const buffer = new LineBuffer();
+            buffer.push(text);
+            buffer.end();
+            const lines = buffer.lines;
+            const truncated =
+              buffer.dropped > 0 || Buffer.byteLength(text, "utf8") >= MAX_LOG_BYTES;
+            if (!forAgent && session === logSession) {
+              await publishLogs({ ...where, loading: false, lines, dropped: buffer.dropped });
+            }
+            return {
+              payload: { ...where, following, logs: lines.join("\n"), truncated },
+              message:
+                lines.length === 0
+                  ? `No logs from the ${run}${container} in ${pod}`
+                  : `Last ${lines.length} line${lines.length === 1 ? "" : "s"} from the ${run}${container} in ${pod}`,
+            };
+          } catch (error) {
+            const failure = toPluginError(error, context, namespace);
+            if (!forAgent && session === logSession) {
+              await publishLogs({
+                loading: false,
+                following: false,
+                error: { kind: reasonOf(failure), message: failure.message },
+              });
+            }
+            throw failure;
+          }
+        },
+      },
+      stop_logs: {
+        async run({ args }) {
+          const close = optionalBoolean(args.close, "close") ?? false;
+          closeFollow();
+          if (close) {
+            logSession++;
+            await publishLogs(null);
+            return { message: "Closed the logs" };
+          }
+          if (state.logs?.following) await publishLogs({ following: false });
+          return { message: "Stopped following the logs" };
+        },
+      },
     },
     async onReady(ready) {
       host = ready;
@@ -366,9 +560,50 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     },
     onShutdown() {
       stopTimer();
+      closeFollow();
       host = null;
     },
   });
+
+  /** Stream a followed log into the view, flushing new lines every `logFlushMs`. */
+  function startFollow(session: number, args: readonly string[]): void {
+    const buffer = new LineBuffer();
+    const flush = () => {
+      logFlush = null;
+      if (session !== logSession) return;
+      void publishLogs({ lines: buffer.lines, dropped: buffer.dropped });
+    };
+    stopFollow = follow(args, {
+      onData(chunk) {
+        buffer.push(chunk);
+        logFlush ??= setTimeout(flush, logFlushMs);
+      },
+      onEnd(error) {
+        buffer.end();
+        if (logFlush) clearTimeout(logFlush);
+        logFlush = null;
+        stopFollow = () => {};
+        if (session !== logSession) return;
+        const ended = error
+          ? describe(error, state.logs?.context ?? null, state.logs?.namespace ?? null).message
+          : "The container stopped writing logs: it exited or the pod is gone.";
+        void publishLogs({
+          lines: buffer.lines,
+          dropped: buffer.dropped,
+          following: false,
+          ended,
+        });
+      },
+    });
+  }
+
+  /** Stop the followed log and flush nothing more from it. */
+  function closeFollow(): void {
+    stopFollow();
+    stopFollow = () => {};
+    if (logFlush) clearTimeout(logFlush);
+    logFlush = null;
+  }
 
   function action(
     pod: string,
@@ -425,6 +660,11 @@ function toPluginError(
   return new PluginError(described.message, { data: { reason: described.kind } });
 }
 
+function reasonOf(error: PluginError): KubeErrorKind {
+  const reason = (error.data as { reason?: unknown } | undefined)?.reason;
+  return typeof reason === "string" ? (reason as KubeErrorKind) : "failed";
+}
+
 function invalid(message: string): PluginError {
   return new PluginError(message, { code: ErrorCode.INVALID_PARAMS });
 }
@@ -436,14 +676,39 @@ function optionalString(value: unknown, name: string, maxLength: number): string
   return value;
 }
 
-function requiredName(value: unknown): string {
+function requiredName(value: unknown, hint: string): string {
   if (value === undefined || value === null || value === "") {
-    throw invalid("pod is required: use the Restart button next to a pod in the Pods panel");
+    throw invalid(`pod is required: ${hint}`);
   }
   if (typeof value !== "string" || !POD_NAME.test(value)) {
     throw invalid(`"${String(value)}" is not a pod name`);
   }
   return value;
+}
+
+function optionalNamespace(value: unknown): string | undefined {
+  const namespace = optionalString(value, "namespace", 63);
+  if (namespace !== undefined && !NAMESPACE.test(namespace)) {
+    throw invalid(`"${namespace}" is not a namespace name`);
+  }
+  return namespace;
+}
+
+function optionalBoolean(value: unknown, name: string): boolean | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw invalid(`${name} must be true or false`);
+}
+
+function optionalTailLines(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const lines = typeof value === "string" ? Number(value) : value;
+  if (typeof lines !== "number" || !Number.isInteger(lines) || lines < 1 || lines > MAX_LOG_LINES) {
+    throw invalid(`tail_lines must be a whole number from 1 to ${MAX_LOG_LINES}`);
+  }
+  return lines;
 }
 
 function optionalInterval(value: unknown): number | undefined {
