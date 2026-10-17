@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { classify } from "./kubectl.ts";
-import { controllerOf, formatAge, podStatus } from "./pods.ts";
+import { controllerOf, formatAge, podStatus, summarizePod } from "./pods.ts";
 
 const pod = (status: Record<string, unknown>, metadata: Record<string, unknown> = {}) => ({
   metadata: { name: "p", ...metadata },
@@ -51,10 +51,80 @@ describe("podStatus", () => {
     expect(podStatus(inits({ terminated: { exitCode: 2 } }))).toBe("Init:ExitCode:2");
   });
 
+  it("counts a started sidecar as ready instead of initializing", () => {
+    const runner = (dind: Record<string, unknown>) => ({
+      metadata: { name: "runner" },
+      spec: {
+        initContainers: [{ name: "init-externals" }, { name: "dind", restartPolicy: "Always" }],
+        containers: [{ name: "runner" }],
+      },
+      status: {
+        phase: "Running",
+        conditions: [{ type: "Initialized", status: "False" }],
+        initContainerStatuses: [
+          { name: "init-externals", restartCount: 1, state: { terminated: { exitCode: 0 } } },
+          { name: "dind", restartCount: 2, ...dind },
+        ],
+        containerStatuses: [
+          { name: "runner", ready: true, restartCount: 3, state: { running: {} } },
+        ],
+      },
+    });
+    const now = new Date("2026-10-17T12:00:00Z");
+    const columns = (dind: Record<string, unknown>) => {
+      const { status, ready, restarts } = summarizePod(runner(dind), now);
+      return { status, ready, restarts };
+    };
+
+    expect(columns({ started: true, ready: true, state: { running: {} } })).toEqual({
+      status: "Running",
+      ready: "2/2",
+      restarts: 5,
+    });
+    expect(columns({ started: true, ready: false, state: { running: {} } })).toEqual({
+      status: "Running",
+      ready: "1/2",
+      restarts: 5,
+    });
+    expect(columns({ started: false, ready: false, state: { running: {} } })).toEqual({
+      status: "Init:1/2",
+      ready: "0/2",
+      restarts: 3,
+    });
+  });
+
+  it("shows a finished pod with a running container as NotReady until it is ready", () => {
+    const finishing = (conditions: unknown[]) =>
+      pod({
+        phase: "Running",
+        conditions,
+        containerStatuses: [
+          { ready: true, state: { running: {} } },
+          { state: { terminated: { reason: "Completed", exitCode: 0 } } },
+        ],
+      });
+    expect(podStatus(finishing([{ type: "Ready", status: "True" }]))).toBe("Running");
+    expect(podStatus(finishing([{ type: "Ready", status: "False" }]))).toBe("NotReady");
+  });
+
+  it("shows a gated pod as SchedulingGated", () => {
+    expect(
+      podStatus(
+        pod({
+          phase: "Pending",
+          conditions: [{ type: "PodScheduled", status: "False", reason: "SchedulingGated" }],
+        }),
+      ),
+    ).toBe("SchedulingGated");
+  });
+
   it("shows a pod being deleted as Terminating", () => {
     expect(
       podStatus(pod({ phase: "Running" }, { deletionTimestamp: "2026-10-08T12:00:00Z" })),
     ).toBe("Terminating");
+    expect(
+      podStatus(pod({ phase: "Succeeded" }, { deletionTimestamp: "2026-10-08T12:00:00Z" })),
+    ).toBe("Succeeded");
   });
 });
 

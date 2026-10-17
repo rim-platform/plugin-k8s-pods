@@ -19,6 +19,13 @@ the version in `rim-plugin.json` and in `package.json`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pods with sidecar containers (init containers with `restartPolicy: Always`, such as the
+  `dind` container of a GitHub Actions runner) show the status, ready count and restarts that
+  `kubectl get pods` shows, instead of staying at `Init:1/2` with the sidecar left out of
+  the ready count.
+
 ## [0.0.1] - 2026-10-16
 
 ### Added

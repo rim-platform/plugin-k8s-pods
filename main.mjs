@@ -1036,50 +1036,68 @@ function summarizePods(list, now) {
 function summarizePod(pod, now) {
   const metadata = asRecord(pod.metadata);
   const spec = asRecord(pod.spec);
-  const statuses = asArray(asRecord(pod.status).containerStatuses);
-  const containerCount = Math.max(asArray(spec.containers).length, statuses.length);
-  const readyCount = statuses.filter((s) => s.ready === true).length;
-  const restarts = statuses.reduce(
-    (sum, s) => sum + (typeof s.restartCount === "number" ? s.restartCount : 0),
-    0
-  );
+  const columns = podColumns(pod);
   const created = typeof metadata.creationTimestamp === "string" ? metadata.creationTimestamp : "";
   const createdAt = created && !Number.isNaN(Date.parse(created)) ? created : null;
   return {
     name: typeof metadata.name === "string" ? metadata.name : "(unnamed)",
-    status: podStatus(pod),
-    ready: `${readyCount}/${containerCount}`,
-    restarts,
+    status: columns.status,
+    ready: `${columns.readyCount}/${columns.containerCount}`,
+    restarts: columns.restarts,
     age: createdAt ? formatAge(new Date(createdAt), now) : "",
     createdAt,
     node: typeof spec.nodeName === "string" ? spec.nodeName : "",
     controller: controllerOf(pod)
   };
 }
-function podStatus(pod) {
+function podColumns(pod) {
   const metadata = asRecord(pod.metadata);
+  const spec = asRecord(pod.spec);
   const status = asRecord(pod.status);
+  const conditions = asArray(status.conditions);
   let reason = text(status.reason) || text(status.phase) || "Unknown";
+  if (conditions.some((c) => c.type === "PodScheduled" && c.reason === "SchedulingGated")) {
+    reason = "SchedulingGated";
+  }
+  const initSpecs = asArray(spec.initContainers);
+  const sidecars = new Set(
+    initSpecs.filter((c) => c.restartPolicy === "Always").map((c) => text(c.name))
+  );
   const inits = asArray(status.initContainerStatuses);
+  const initCount = Math.max(initSpecs.length, inits.length);
+  const containerCount = Math.max(asArray(spec.containers).length, asArray(status.containerStatuses).length) + sidecars.size;
+  let readyCount = 0;
+  let restarts = 0;
+  let sidecarRestarts = 0;
   let initializing = false;
   for (const [index, init] of inits.entries()) {
+    const sidecar = sidecars.has(text(init.name));
+    restarts += restartCount(init);
+    if (sidecar) sidecarRestarts += restartCount(init);
     const state = asRecord(init.state);
     const terminated = asRecord(state.terminated);
     const waiting = asRecord(state.waiting);
     if (state.terminated !== void 0 && terminated.exitCode === 0) continue;
+    if (sidecar && init.started === true) {
+      if (init.ready === true) readyCount++;
+      continue;
+    }
     initializing = true;
     if (state.terminated !== void 0) {
       reason = `Init:${text(terminated.reason) || exitText(terminated)}`;
     } else if (text(waiting.reason) && waiting.reason !== "PodInitializing") {
       reason = `Init:${text(waiting.reason)}`;
     } else {
-      reason = `Init:${index}/${inits.length}`;
+      reason = `Init:${index}/${initCount}`;
     }
     break;
   }
-  if (!initializing) {
+  const initialized = conditions.some((c) => c.type === "Initialized" && c.status === "True");
+  if (!initializing || initialized) {
+    restarts = sidecarRestarts;
     let running = false;
     for (const container of asArray(status.containerStatuses).reverse()) {
+      restarts += restartCount(container);
       const state = asRecord(container.state);
       const waiting = asRecord(state.waiting);
       const terminated = asRecord(state.terminated);
@@ -1089,14 +1107,22 @@ function podStatus(pod) {
         reason = text(terminated.reason) || exitText(terminated);
       } else if (state.running !== void 0 && container.ready === true) {
         running = true;
+        readyCount++;
       }
     }
-    if (reason === "Completed" && running) reason = "Running";
+    if (reason === "Completed" && running) {
+      const ready = conditions.some((c) => c.type === "Ready" && c.status === "True");
+      reason = ready ? "Running" : "NotReady";
+    }
   }
   if (metadata.deletionTimestamp !== void 0 && metadata.deletionTimestamp !== null) {
-    reason = status.reason === "NodeLost" ? "Unknown" : "Terminating";
+    if (status.reason === "NodeLost") {
+      reason = "Unknown";
+    } else if (status.phase !== "Succeeded" && status.phase !== "Failed") {
+      reason = "Terminating";
+    }
   }
-  return reason;
+  return { status: reason, readyCount, containerCount, restarts };
 }
 function controllerOf(pod) {
   const owner = asArray(asRecord(pod.metadata).ownerReferences).find((o) => o.controller === true);
@@ -1113,6 +1139,9 @@ function formatAge(from, now) {
   const days = Math.floor(hours / 24);
   if (days < 730) return `${days}d`;
   return `${Math.floor(days / 365)}y`;
+}
+function restartCount(status) {
+  return typeof status.restartCount === "number" ? status.restartCount : 0;
 }
 function text(value) {
   return typeof value === "string" ? value : "";
