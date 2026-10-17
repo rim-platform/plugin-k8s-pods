@@ -29,20 +29,14 @@ export function summarizePods(list: unknown, now: Date): PodSummary[] {
 export function summarizePod(pod: Record<string, unknown>, now: Date): PodSummary {
   const metadata = asRecord(pod.metadata);
   const spec = asRecord(pod.spec);
-  const statuses = asArray(asRecord(pod.status).containerStatuses);
-  const containerCount = Math.max(asArray(spec.containers).length, statuses.length);
-  const readyCount = statuses.filter((s) => s.ready === true).length;
-  const restarts = statuses.reduce(
-    (sum, s) => sum + (typeof s.restartCount === "number" ? s.restartCount : 0),
-    0,
-  );
+  const columns = podColumns(pod);
   const created = typeof metadata.creationTimestamp === "string" ? metadata.creationTimestamp : "";
   const createdAt = created && !Number.isNaN(Date.parse(created)) ? created : null;
   return {
     name: typeof metadata.name === "string" ? metadata.name : "(unnamed)",
-    status: podStatus(pod),
-    ready: `${readyCount}/${containerCount}`,
-    restarts,
+    status: columns.status,
+    ready: `${columns.readyCount}/${columns.containerCount}`,
+    restarts: columns.restarts,
     age: createdAt ? formatAge(new Date(createdAt), now) : "",
     createdAt,
     node: typeof spec.nodeName === "string" ? spec.nodeName : "",
@@ -52,31 +46,74 @@ export function summarizePod(pod: Record<string, unknown>, now: Date): PodSummar
 
 /** STATUS as `kubectl get pods` computes it. */
 export function podStatus(pod: Record<string, unknown>): string {
-  const metadata = asRecord(pod.metadata);
-  const status = asRecord(pod.status);
-  let reason = text(status.reason) || text(status.phase) || "Unknown";
+  return podColumns(pod).status;
+}
 
+interface PodColumns {
+  readonly status: string;
+  readonly readyCount: number;
+  readonly containerCount: number;
+  readonly restarts: number;
+}
+
+/**
+ * STATUS, READY and RESTARTS as `kubectl get pods` computes them. Sidecars (init
+ * containers with `restartPolicy: Always`) count as containers, and a started
+ * sidecar no longer holds the pod in initialization.
+ */
+function podColumns(pod: Record<string, unknown>): PodColumns {
+  const metadata = asRecord(pod.metadata);
+  const spec = asRecord(pod.spec);
+  const status = asRecord(pod.status);
+  const conditions = asArray(status.conditions);
+  let reason = text(status.reason) || text(status.phase) || "Unknown";
+  if (conditions.some((c) => c.type === "PodScheduled" && c.reason === "SchedulingGated")) {
+    reason = "SchedulingGated";
+  }
+
+  const initSpecs = asArray(spec.initContainers);
+  const sidecars = new Set(
+    initSpecs.filter((c) => c.restartPolicy === "Always").map((c) => text(c.name)),
+  );
   const inits = asArray(status.initContainerStatuses);
+  const initCount = Math.max(initSpecs.length, inits.length);
+  const containerCount =
+    Math.max(asArray(spec.containers).length, asArray(status.containerStatuses).length) +
+    sidecars.size;
+
+  let readyCount = 0;
+  let restarts = 0;
+  let sidecarRestarts = 0;
   let initializing = false;
   for (const [index, init] of inits.entries()) {
+    const sidecar = sidecars.has(text(init.name));
+    restarts += restartCount(init);
+    if (sidecar) sidecarRestarts += restartCount(init);
     const state = asRecord(init.state);
     const terminated = asRecord(state.terminated);
     const waiting = asRecord(state.waiting);
     if (state.terminated !== undefined && terminated.exitCode === 0) continue;
+    if (sidecar && init.started === true) {
+      if (init.ready === true) readyCount++;
+      continue;
+    }
     initializing = true;
     if (state.terminated !== undefined) {
       reason = `Init:${text(terminated.reason) || exitText(terminated)}`;
     } else if (text(waiting.reason) && waiting.reason !== "PodInitializing") {
       reason = `Init:${text(waiting.reason)}`;
     } else {
-      reason = `Init:${index}/${inits.length}`;
+      reason = `Init:${index}/${initCount}`;
     }
     break;
   }
 
-  if (!initializing) {
+  const initialized = conditions.some((c) => c.type === "Initialized" && c.status === "True");
+  if (!initializing || initialized) {
+    restarts = sidecarRestarts;
     let running = false;
     for (const container of asArray(status.containerStatuses).reverse()) {
+      restarts += restartCount(container);
       const state = asRecord(container.state);
       const waiting = asRecord(state.waiting);
       const terminated = asRecord(state.terminated);
@@ -86,15 +123,23 @@ export function podStatus(pod: Record<string, unknown>): string {
         reason = text(terminated.reason) || exitText(terminated);
       } else if (state.running !== undefined && container.ready === true) {
         running = true;
+        readyCount++;
       }
     }
-    if (reason === "Completed" && running) reason = "Running";
+    if (reason === "Completed" && running) {
+      const ready = conditions.some((c) => c.type === "Ready" && c.status === "True");
+      reason = ready ? "Running" : "NotReady";
+    }
   }
 
   if (metadata.deletionTimestamp !== undefined && metadata.deletionTimestamp !== null) {
-    reason = status.reason === "NodeLost" ? "Unknown" : "Terminating";
+    if (status.reason === "NodeLost") {
+      reason = "Unknown";
+    } else if (status.phase !== "Succeeded" && status.phase !== "Failed") {
+      reason = "Terminating";
+    }
   }
-  return reason;
+  return { status: reason, readyCount, containerCount, restarts };
 }
 
 /** `ReplicaSet/web-7f9c` for the owner that recreates the pod, or `null` for a bare pod. */
@@ -115,6 +160,10 @@ export function formatAge(from: Date, now: Date): string {
   const days = Math.floor(hours / 24);
   if (days < 730) return `${days}d`;
   return `${Math.floor(days / 365)}y`;
+}
+
+function restartCount(status: Record<string, unknown>): number {
+  return typeof status.restartCount === "number" ? status.restartCount : 0;
 }
 
 function text(value: unknown): string {
