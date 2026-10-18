@@ -589,6 +589,42 @@ describe("k8s-pods plugin", () => {
       );
     });
 
+    it("never puts the paths the settings name in the panel or a command answer", async () => {
+      const kubeconfig = "/home/someone/.kube/secret-cluster.yaml";
+      const kubectlPath = "/home/someone/bin/kubectl";
+      let failure = new KubeError("kubectl_missing", `${kubectlPath} was not found`);
+      const t = start(
+        "ok",
+        undefined,
+        () => async () => {
+          throw failure;
+        },
+        { settings: { kubeconfig, kubectl_path: kubectlPath } },
+      );
+      await t.host.handshake();
+      expect((await settled(t.panel)).error).toMatchObject({
+        kind: "kubectl_missing",
+        detail: "<kubectl path setting> was not found",
+      });
+      for (const detail of [
+        `error loading config file "${kubeconfig}": yaml: line 1: did not find expected node content`,
+        `stat ${kubeconfig}: no such file or directory`,
+        `unknown flag --kubeconfig=${kubeconfig} for ${kubectlPath}`,
+      ]) {
+        failure = new KubeError(detail.startsWith("unknown") ? "failed" : "no_kubeconfig", detail);
+        const answer = await t.host.execute("refresh");
+        expect(answer.error).toBeDefined();
+        for (const seen of [JSON.stringify(answer), JSON.stringify(t.panel())]) {
+          expect(seen).not.toContain(kubeconfig);
+          expect(seen).not.toContain(kubectlPath);
+        }
+      }
+      expect(t.panel().error?.message).toBe(
+        "kubectl failed: unknown flag --kubeconfig=<kubeconfig setting> for <kubectl path setting>",
+      );
+      await t.host.shutdown();
+    });
+
     it("opens on the default context and namespace, in every context until picked", async () => {
       const t = start("ok", undefined, undefined, {
         settings: { default_context: "prod", default_namespace: "kube-system" },

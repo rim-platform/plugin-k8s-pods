@@ -1834,6 +1834,7 @@ function describe(error, context, namespace, settings = DEFAULT_SETTINGS) {
   if (!(error instanceof KubeError)) {
     return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
   }
+  const detail = withoutSettingsPaths(error.detail, settings);
   const ctx = context ? `"${context}"` : "the current context";
   const ns = namespace ? `"${namespace}"` : "this namespace";
   const message = (() => {
@@ -1851,12 +1852,19 @@ function describe(error, context, namespace, settings = DEFAULT_SETTINGS) {
       case "forbidden":
         return `Your account may not do this in the namespace ${ns} on ${ctx}. Pick another namespace or ask a cluster admin for access.`;
       case "not_found":
-        return `Not found in the namespace ${ns}: ${error.detail}`;
+        return `Not found in the namespace ${ns}: ${detail}`;
       case "failed":
-        return `kubectl failed: ${error.detail}`;
+        return `kubectl failed: ${detail}`;
     }
   })();
-  return { kind: error.kind, message, detail: error.detail };
+  return { kind: error.kind, message, detail };
+}
+function withoutSettingsPaths(text3, settings) {
+  const paths = [
+    [settings.kubeconfig, "<kubeconfig setting>"],
+    [settings.kubectlPath, "<kubectl path setting>"]
+  ];
+  return paths.filter((entry) => entry[0] !== null).sort((a, b) => b[0].length - a[0].length).reduce((redacted, [path2, label]) => redacted.split(path2).join(label), text3);
 }
 function toPluginError(error, context, namespace, settings) {
   if (error instanceof PluginError) return error;

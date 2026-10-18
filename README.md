@@ -64,8 +64,10 @@ account may not list namespaces, type the namespace instead.
 
 Open them from the side rail's **Plugins** menu (the **Kubernetes Pods** "Settings" row, while
 the plugin is on) or with **Settings** on its row in Settings → Plugins. Every one is optional.
-They are kept on this device for your account and never synced or sent to the RIM server; the
-panel and the AI agent never see them.
+They are kept on this device for your account, never synced or sent to the RIM server. The panel
+and the AI agent see only the context and namespace in use, never the kubeconfig or kubectl
+paths: where kubectl's error text names one, the plugin shows `<kubeconfig setting>` or
+`<kubectl path setting>` in its place.
 
 | Setting                                                  | Default                                                   | What it does                                                                                                                            |
 | -------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |

@@ -724,6 +724,7 @@ export function describe(
   if (!(error instanceof KubeError)) {
     return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
   }
+  const detail = withoutSettingsPaths(error.detail, settings);
   const ctx = context ? `"${context}"` : "the current context";
   const ns = namespace ? `"${namespace}"` : "this namespace";
   const message = ((): string => {
@@ -747,12 +748,24 @@ export function describe(
       case "forbidden":
         return `Your account may not do this in the namespace ${ns} on ${ctx}. Pick another namespace or ask a cluster admin for access.`;
       case "not_found":
-        return `Not found in the namespace ${ns}: ${error.detail}`;
+        return `Not found in the namespace ${ns}: ${detail}`;
       case "failed":
-        return `kubectl failed: ${error.detail}`;
+        return `kubectl failed: ${detail}`;
     }
   })();
-  return { kind: error.kind, message, detail: error.detail };
+  return { kind: error.kind, message, detail };
+}
+
+/** kubectl's error text with the paths the settings name replaced by what they are. */
+function withoutSettingsPaths(text: string, settings: PluginSettings): string {
+  const paths: Array<[string | null, string]> = [
+    [settings.kubeconfig, "<kubeconfig setting>"],
+    [settings.kubectlPath, "<kubectl path setting>"],
+  ];
+  return paths
+    .filter((entry): entry is [string, string] => entry[0] !== null)
+    .sort((a, b) => b[0].length - a[0].length)
+    .reduce((redacted, [path, label]) => redacted.split(path).join(label), text);
 }
 
 function toPluginError(
