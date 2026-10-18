@@ -26,6 +26,12 @@ the version in `rim-plugin.json` and in `package.json`.
   first and up to 5000. The AI agent may read logs only after you allow this command in the
   plugin's AI permissions; it never follows them. **Pods: Stop following logs** (`stop_logs`)
   stops following and closes the view.
+- Settings, in the plugin's **Settings** form (the side rail's Plugins menu, or Settings →
+  Plugins): the kubeconfig file and the kubectl program to use, the context and namespace the
+  panel opens on, how often it refreshes (5 to 3600 seconds, 15 by default) and how many log
+  lines a log view starts with (100 by default). A saved change applies at once. The settings
+  change the plugin's manifest, so RIM asks once more before the AI agent may use the plugin's
+  commands.
 
 ### Fixed
 

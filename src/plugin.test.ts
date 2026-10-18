@@ -1,10 +1,13 @@
 // Tests the pods plugin against the SDK's in-memory host and a pretend
 // cluster: no RIM app, no kubectl and no cluster needed.
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { startTestHost, validateManifest } from "@rim-platform/plugin-sdk/testing";
 
-import { createPlugin, PANEL_ID, type PanelState } from "./plugin.ts";
+import { createPlugin, describe as describeError, PANEL_ID, type PanelState } from "./plugin.ts";
+import { DEFAULT_SETTINGS } from "./settings.ts";
 import { KubeError, type Kubectl } from "./kubectl.ts";
 import type { FollowSink } from "./logs.ts";
 import { fakeKubectl, type Scenario } from "./test/fake-cluster.ts";
@@ -13,19 +16,37 @@ const MANIFEST = `${import.meta.dirname}/../rim-plugin.json`;
 const NOW = new Date("2026-10-08T12:00:00Z");
 const CONFIRMED = { confirmed: true } as const;
 
+/** The binary the plugin finds when its settings name none. */
+const FOUND_KUBECTL = "/found/kubectl";
+
+/** How the test host answers `rim.settings.get`. */
+interface SettingsAnswer {
+  /** The saved settings; without them a read fails as `settingsError` says. */
+  readonly settings?: Readonly<Record<string, unknown>>;
+  /** The error a read gets; defaults to `METHOD_NOT_FOUND`, as from a host before settings. */
+  readonly settingsError?: { code: number; message: string; data?: unknown };
+}
+
 function start(
   scenario: Scenario = "ok",
   grantedCapabilities = ["ui.panel", "ui.notify"],
   wrap: (kubectl: Kubectl) => Kubectl = (kubectl) => kubectl,
+  { settings, settingsError }: SettingsAnswer = {},
 ) {
   const fake = fakeKubectl(scenario);
+  /** The binary of each kubectl call and followed log, in order. */
+  const binaries: string[] = [];
   /** Each `kubectl logs --follow` started, with its output sink and whether it was stopped. */
   const follows: Array<{ args: readonly string[]; sink: FollowSink; stopped: boolean }> = [];
   const ticks: Array<() => void> = [];
   const intervals: number[] = [];
   const panels: PanelState[] = [];
   const plugin = createPlugin({
-    kubectl: wrap(fake.kubectl),
+    kubectl: (binary) => {
+      binaries.push(binary);
+      return wrap(fake.kubectl);
+    },
+    findKubectl: () => FOUND_KUBECTL,
     now: () => NOW,
     every: (ms, run) => {
       intervals.push(ms);
@@ -34,7 +55,8 @@ function start(
         intervals.push(-ms);
       };
     },
-    follow: (args, sink) => {
+    follow: (binary) => (args, sink) => {
+      binaries.push(binary);
       const started = { args, sink, stopped: false };
       follows.push(started);
       return () => {
@@ -46,7 +68,11 @@ function start(
   const host = startTestHost(plugin, {
     manifestPath: MANIFEST,
     grantedCapabilities,
+    settings,
     onRequest(method, params) {
+      if (method === "rim.settings.get") {
+        throw settingsError ?? { code: -32601, message: "method not found: rim.settings.get" };
+      }
       const p = params as { panel_id: string; state: PanelState; patch?: boolean };
       if (method === "rim.ui.update_panel" && p.panel_id === PANEL_ID) {
         panels.push(p.patch ? { ...(panels.at(-1) as PanelState), ...p.state } : p.state);
@@ -55,7 +81,7 @@ function start(
     },
   });
   const panel = () => panels.at(-1) as PanelState;
-  return { host, fake, follows, ticks, intervals, panels, panel };
+  return { host, fake, follows, ticks, intervals, panels, panel, binaries };
 }
 
 /** Wait until the plugin's first listing reached the panel. */
@@ -92,6 +118,23 @@ describe("k8s-pods plugin", () => {
       .map((c: { id: string }) => c.id);
     expect(aiCallable).toEqual(["refresh", "filter", "restart_pod", "pod_logs"]);
     expect(manifest.description).toContain("credentials never leave this device");
+    // No secret settings: the plugin never asks for a credential of its own.
+    expect(
+      manifest.settings_schema.map(
+        (s: { key: string; value_type: string; is_secret?: boolean }) => [
+          s.key,
+          s.value_type,
+          s.is_secret ?? false,
+        ],
+      ),
+    ).toEqual([
+      ["kubeconfig", "path", false],
+      ["kubectl_path", "path", false],
+      ["default_context", "string", false],
+      ["default_namespace", "string", false],
+      ["refresh_interval_seconds", "integer", false],
+      ["log_tail_lines", "integer", false],
+    ]);
   });
 
   it("lists the current context's pods on start and refreshes on the interval", async () => {
@@ -477,6 +520,219 @@ describe("k8s-pods plugin", () => {
         expect(refused.error?.message).toMatch(message);
       }
       expect(t.fake.calls.some((c) => c[0] === "logs")).toBe(false);
+      await t.host.shutdown();
+    });
+  });
+
+  describe("settings", () => {
+    /** The settings get, among the frames the plugin sent. */
+    const readSettings = (t: ReturnType<typeof start>) =>
+      t.host.frames.filter((f) => (f as { method?: string }).method === "rim.settings.get");
+
+    it("uses the defaults when the user saved none", async () => {
+      const t = start("ok", undefined, undefined, { settings: {} });
+      await t.host.handshake();
+      const state = await settled(t.panel);
+      expect(readSettings(t)).toHaveLength(1);
+      expect(state).toMatchObject({
+        context: "kind-dev",
+        namespace: "shop",
+        intervalSeconds: 15,
+        logTailLines: 100,
+      });
+      expect(t.intervals).toEqual([15_000]);
+      await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", follow: true });
+      expect(t.follows[0].args).toContain("--tail=100");
+      expect(new Set(t.binaries)).toEqual(new Set([FOUND_KUBECTL]));
+      expect(t.fake.calls.flat().some((a) => a.startsWith("--kubeconfig"))).toBe(false);
+      expect(t.host.logs.filter((l) => l.level === "warn")).toEqual([]);
+      await t.host.shutdown();
+    });
+
+    it("runs the kubectl the settings name, with their kubeconfig on every call", async () => {
+      const t = start("ok", undefined, undefined, {
+        settings: { kubectl_path: "/opt/kubectl/kubectl", kubeconfig: "~/.kube/dev.yaml" },
+      });
+      await t.host.handshake();
+      expect((await settled(t.panel)).error).toBeNull();
+      await t.host.execute("pod_logs", { pod: "web-7f9c-abcde", follow: true });
+
+      const flag = `--kubeconfig=${join(homedir(), ".kube/dev.yaml")}`;
+      expect(t.fake.calls.length).toBeGreaterThan(0);
+      for (const call of [...t.fake.calls, t.follows[0].args]) {
+        expect(call.at(-1)).toBe(flag);
+      }
+      expect(t.fake.calls[0]).toEqual(["config", "view", "-o", "json", flag]);
+      expect(new Set(t.binaries)).toEqual(new Set(["/opt/kubectl/kubectl"]));
+      await t.host.shutdown();
+    });
+
+    it("says when the kubectl or kubeconfig the settings name is not there", () => {
+      const missing = describeError(
+        new KubeError("kubectl_missing", "x was not found"),
+        null,
+        null,
+        {
+          ...DEFAULT_SETTINGS,
+          kubectlPath: "/nowhere/kubectl",
+        },
+      );
+      expect(missing.message).toMatch(
+        /^kubectl was not found at the kubectl path in the plugin's settings/,
+      );
+      const config = describeError(new KubeError("no_kubeconfig", "stat"), null, null, {
+        ...DEFAULT_SETTINGS,
+        kubeconfig: "/nowhere/config",
+      });
+      expect(config.message).toMatch(
+        /^The kubeconfig file in the plugin's settings could not be read/,
+      );
+    });
+
+    it("opens on the default context and namespace, in every context until picked", async () => {
+      const t = start("ok", undefined, undefined, {
+        settings: { default_context: "prod", default_namespace: "kube-system" },
+      });
+      await t.host.handshake();
+      const state = await settled(t.panel);
+      expect(state).toMatchObject({ context: "prod", namespace: "kube-system", error: null });
+      expect(t.fake.calls).toContainEqual(
+        expect.arrayContaining(["get", "pods", "--context=prod", "--namespace=kube-system"]),
+      );
+
+      await t.host.execute("filter", { context: "kind-dev" });
+      expect(t.panel()).toMatchObject({ context: "kind-dev", namespace: "kube-system" });
+      await t.host.execute("filter", { namespace: "shop" });
+      expect(t.panel()).toMatchObject({ context: "kind-dev", namespace: "shop" });
+      await t.host.shutdown();
+    });
+
+    it("says so when the default context is not in the kubeconfig, and lets you pick one", async () => {
+      const t = start("ok", undefined, undefined, { settings: { default_context: "staging" } });
+      await t.host.handshake();
+      const state = await settled(t.panel);
+      expect(state.contexts).toEqual(["kind-dev", "prod"]);
+      expect(state.error).toMatchObject({ kind: "context_missing" });
+      expect(state.error?.message).toBe(
+        'The context "staging", the default context in the plugin\'s settings, is not in your kubeconfig. Pick another context, or change the setting.',
+      );
+      expect(t.fake.calls.some((c) => c.includes("--context=staging"))).toBe(false);
+
+      const picked = await t.host.execute("filter", { context: "kind-dev" });
+      expect(picked.result?.message).toBe("3 pods in shop (kind-dev)");
+      await t.host.shutdown();
+    });
+
+    it("refreshes on the interval and starts logs with the line count the settings give", async () => {
+      const t = start("ok", undefined, undefined, {
+        settings: { refresh_interval_seconds: 60, log_tail_lines: 500 },
+      });
+      await t.host.handshake();
+      const state = await settled(t.panel);
+      expect(state).toMatchObject({ intervalSeconds: 60, logTailLines: 500 });
+      expect(t.intervals).toEqual([60_000]);
+      const answer = await t.host.execute("pod_logs", { pod: "web-7f9c-abcde" });
+      expect(answer.result?.message).toBe("Last 150 lines from the web in web-7f9c-abcde");
+      expect(t.fake.calls).toContainEqual(expect.arrayContaining(["logs", "--tail=500"]));
+      await t.host.shutdown();
+    });
+
+    it("applies changed settings at once, and keeps a pick the change does not touch", async () => {
+      const t = start("ok", undefined, undefined, { settings: {} });
+      await t.host.handshake();
+      await settled(t.panel);
+
+      t.host.changeSettings({
+        default_namespace: "default",
+        refresh_interval_seconds: 30,
+        log_tail_lines: 1000,
+        kubectl_path: "/usr/local/bin/kubectl",
+      });
+      await vi.waitFor(() =>
+        expect(t.panel()).toMatchObject({
+          namespace: "default",
+          intervalSeconds: 30,
+          logTailLines: 1000,
+          loading: false,
+        }),
+      );
+      expect(t.intervals).toEqual([15_000, -15_000, 30_000]);
+      expect(t.binaries.at(-1)).toBe("/usr/local/bin/kubectl");
+
+      // A pick made in the panel stays while the default namespace stays the same.
+      await t.host.execute("filter", { namespace: "kube-system" });
+      t.host.changeSettings({
+        default_namespace: "default",
+        refresh_interval_seconds: 30,
+        log_tail_lines: 500,
+        kubectl_path: "/usr/local/bin/kubectl",
+      });
+      await vi.waitFor(() => expect(t.panel().logTailLines).toBe(500));
+      expect(t.panel().namespace).toBe("kube-system");
+      expect(t.intervals).toEqual([15_000, -15_000, 30_000]);
+
+      // A cleared setting is missing from the new set: back to the defaults.
+      t.host.changeSettings({});
+      await vi.waitFor(() =>
+        expect(t.panel()).toMatchObject({
+          namespace: "shop",
+          intervalSeconds: 15,
+          logTailLines: 100,
+          loading: false,
+        }),
+      );
+      await t.host.execute("refresh");
+      expect(t.binaries.at(-1)).toBe(FOUND_KUBECTL);
+      await t.host.shutdown();
+    });
+
+    it("keeps the defaults when the settings cannot be read", async () => {
+      const t = start("ok", undefined, undefined, {
+        settingsError: {
+          code: -32603,
+          message: "the secret vault is locked",
+          data: { reason: "secretsLocked" },
+        },
+      });
+      await t.host.handshake();
+      const state = await settled(t.panel);
+      expect(state).toMatchObject({ context: "kind-dev", namespace: "shop", error: null });
+      expect(t.intervals).toEqual([15_000]);
+      expect(
+        t.host.logs.some(
+          (l) =>
+            l.level === "warn" &&
+            /^using the default settings, since they could not be read: .*vault is locked/.test(
+              l.message,
+            ),
+        ),
+      ).toBe(true);
+      await t.host.shutdown();
+    });
+
+    it("keeps the defaults on a host from before settings, without a warning", async () => {
+      const t = start();
+      await t.host.handshake();
+      await settled(t.panel);
+      expect(readSettings(t)).toHaveLength(1);
+      expect(t.host.logs.filter((l) => l.level === "warn")).toEqual([]);
+      await t.host.shutdown();
+    });
+
+    it("leaves values that do not fit unset, and says which", async () => {
+      const t = start("ok", undefined, undefined, {
+        settings: { refresh_interval_seconds: 2, default_namespace: "Not_A_Namespace" },
+      });
+      await t.host.handshake();
+      const state = await settled(t.panel);
+      expect(state).toMatchObject({ namespace: "shop", intervalSeconds: 15 });
+      expect(t.host.logs).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          message:
+            "settings left unset, since their values do not fit: default_namespace, refresh_interval_seconds",
+        }),
+      );
       await t.host.shutdown();
     });
   });

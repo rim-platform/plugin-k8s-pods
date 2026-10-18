@@ -13,6 +13,7 @@ import {
 
 import {
   deletePod,
+  findKubectl,
   getLogs,
   getPod,
   getPods,
@@ -34,23 +35,27 @@ import {
   summarizePods,
   type PodSummary,
 } from "./pods.ts";
+import {
+  DEFAULT_SETTINGS,
+  kubectlFlags,
+  MAX_INTERVAL_SECONDS,
+  MIN_INTERVAL_SECONDS,
+  NAMESPACE,
+  parseSettings,
+  type PluginSettings,
+} from "./settings.ts";
 
 export const PLUGIN_ID = "chat.rim.k8s-pods";
 export const PANEL_ID = "pods";
 
-export const DEFAULT_INTERVAL_SECONDS = 15;
-const MIN_INTERVAL_SECONDS = 5;
-const MAX_INTERVAL_SECONDS = 3600;
 /** Pods kept in the panel state; the host caps a plugin's panel state at 1 MiB. */
 const MAX_PANEL_PODS = 2000;
 /** Pods returned to the palette or the agent in one answer. */
 const MAX_PAYLOAD_PODS = 500;
 const MAX_FILTER_LENGTH = 100;
-export const DEFAULT_LOG_LINES = 100;
 /** How often streamed log lines reach the panel. */
 const LOG_FLUSH_MS = 250;
 
-const NAMESPACE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const CONTAINER_NAME = NAMESPACE;
 const POD_NAME = /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/;
 
@@ -120,13 +125,15 @@ export interface PanelState {
 export type Every = (ms: number, run: () => void) => () => void;
 
 export interface K8sPodsOptions {
-  /** Defaults to kubectl on this device. */
-  readonly kubectl?: Kubectl;
+  /** kubectl run from the binary given; defaults to {@link systemKubectl}. */
+  readonly kubectl?: (binary: string) => Kubectl;
+  /** Finds kubectl when the settings name no binary; defaults to {@link findKubectl}. */
+  readonly findKubectl?: () => string;
   readonly now?: () => Date;
   /** Defaults to `setInterval`. */
   readonly every?: Every;
-  /** Defaults to `kubectl logs --follow` on this device. */
-  readonly follow?: Follow;
+  /** `kubectl logs --follow` run from the binary given; defaults to {@link systemFollow}. */
+  readonly follow?: (binary: string) => Follow;
   /** Defaults to 250 ms. */
   readonly logFlushMs?: number;
 }
@@ -138,11 +145,22 @@ const defaultEvery: Every = (ms, run) => {
 
 /** A fresh plugin with its own selection and timer. */
 export function createPlugin(options: K8sPodsOptions = {}) {
-  const kubectl = options.kubectl ?? systemKubectl();
+  const kubectlAt = options.kubectl ?? systemKubectl;
+  const followAt = options.follow ?? systemFollow;
+  const find = options.findKubectl ?? findKubectl;
   const now = options.now ?? (() => new Date());
   const every = options.every ?? defaultEvery;
-  const follow = options.follow ?? systemFollow();
   const logFlushMs = options.logFlushMs ?? LOG_FLUSH_MS;
+
+  let settings: PluginSettings = DEFAULT_SETTINGS;
+  /** Settings sets received from the host, so an older answer never replaces a newer set. */
+  let settingsReceived = 0;
+  let foundKubectl: string | null = null;
+  /** The kubectl binary: the one the settings name, else the one found on this device. */
+  const binary = () => settings.kubectlPath ?? (foundKubectl ??= find());
+  const kubectl: Kubectl = (args) => kubectlAt(binary())([...args, ...kubectlFlags(settings)]);
+  const follow: Follow = (args, sink) =>
+    followAt(binary())([...args, ...kubectlFlags(settings)], sink);
 
   let state: PanelState = {
     contexts: [],
@@ -150,7 +168,7 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     namespace: null,
     namespaces: null,
     filter: "",
-    intervalSeconds: DEFAULT_INTERVAL_SECONDS,
+    intervalSeconds: settings.intervalSeconds,
     pods: [],
     totalPods: 0,
     fetchedAt: null,
@@ -158,13 +176,15 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     error: null,
     lastAction: null,
     logs: null,
-    logTailLines: DEFAULT_LOG_LINES,
+    logTailLines: settings.logTailLines,
   };
   let allPods: PodSummary[] = [];
   /** Namespaces per context, listed once per context. */
   const namespaceCache = new Map<string, string[] | null>();
   let host: Host | null = null;
   let panelDenied = false;
+  /** The first listing has started, so a settings change applies at once. */
+  let started = false;
   let stopTimer: () => void = () => {};
   let inFlight: Promise<PanelState> | null = null;
   let queued: Promise<PanelState> | null = null;
@@ -187,15 +207,17 @@ export function createPlugin(options: K8sPodsOptions = {}) {
   }
 
   async function toPanel(update: (ready: Host) => Promise<void>): Promise<void> {
-    if (!host || panelDenied) return;
+    // The host this update went to, which a shutdown during it does not take away.
+    const ready = host;
+    if (!ready || panelDenied) return;
     try {
-      await update(host);
+      await update(ready);
     } catch (error) {
       if (error instanceof HostRequestError && error.code === ErrorCode.CAPABILITY_DENIED) {
         panelDenied = true;
-        host.log.warn("the pods panel stays empty: the ui.panel permission is not approved");
+        ready.log.warn("the pods panel stays empty: the ui.panel permission is not approved");
       } else {
-        host.log.warn(`could not update the pods panel: ${(error as Error).message}`);
+        ready.log.warn(`could not update the pods panel: ${(error as Error).message}`);
       }
     }
   }
@@ -210,7 +232,20 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     return matching.slice(0, MAX_PANEL_PODS);
   }
 
-  /** Read the kubeconfig and make sure the selection names one of its contexts. */
+  /** The context shown when none is picked: the settings', else the kubeconfig's current one. */
+  function defaultContextOf(config: KubeConfig): string {
+    return settings.defaultContext ?? config.current ?? config.contexts[0];
+  }
+
+  /** The namespace shown in `context` when none is picked. */
+  function defaultNamespaceOf(config: KubeConfig, context: string): string {
+    return settings.defaultNamespace ?? config.namespaces[context] ?? "default";
+  }
+
+  /**
+   * Read the kubeconfig and make sure the selection names one of its contexts,
+   * else the default one, which may be a context from the settings it lacks.
+   */
   async function resolveSelection(): Promise<{
     config: KubeConfig;
     context: string;
@@ -218,12 +253,12 @@ export function createPlugin(options: K8sPodsOptions = {}) {
   }> {
     const config = await readConfig(kubectl);
     const keep = state.context !== null && config.contexts.includes(state.context);
-    const context = keep ? (state.context as string) : (config.current ?? config.contexts[0]);
-    // A namespace picked before any context was resolved applies to the current one.
+    const context = keep ? (state.context as string) : defaultContextOf(config);
+    // A namespace picked before any context was resolved applies to the default one.
     const namespace =
       (keep || state.context === null) && state.namespace
         ? state.namespace
-        : (config.namespaces[context] ?? "default");
+        : defaultNamespaceOf(config, context);
     return { config, context, namespace };
   }
 
@@ -237,6 +272,9 @@ export function createPlugin(options: K8sPodsOptions = {}) {
       if (state.context !== asked.context || state.namespace !== asked.namespace) return state;
       where = { context, namespace };
       await publish({ contexts: config.contexts, context, namespace });
+      if (!config.contexts.includes(context)) {
+        throw new KubeError("context_missing", `context "${context}" does not exist`);
+      }
       if (!namespaceCache.has(context)) {
         namespaceCache.set(context, await listNamespaces(kubectl, context));
       }
@@ -258,7 +296,7 @@ export function createPlugin(options: K8sPodsOptions = {}) {
         pods: [],
         totalPods: 0,
         loading: false,
-        error: describe(error, where.context, where.namespace),
+        error: describe(error, where.context, where.namespace, settings),
       });
     }
     return state;
@@ -294,22 +332,21 @@ export function createPlugin(options: K8sPodsOptions = {}) {
 
   /**
    * The context and namespace a pod command acts in: the ones given, else the
-   * panel's, else the kubeconfig's.
+   * panel's, else the defaults.
    */
   async function targetOf(
     contextArg: string | undefined,
     namespaceArg: string | undefined,
   ): Promise<{ context: string; namespace: string }> {
     const config = await readConfig(kubectl);
-    const context = contextArg ?? state.context ?? config.current ?? config.contexts[0];
+    const context = contextArg ?? state.context ?? defaultContextOf(config);
     if (!config.contexts.includes(context)) {
       throw invalid(`context "${context}" is not in your kubeconfig`);
     }
     const namespace =
       namespaceArg ??
       (context === state.context ? state.namespace : null) ??
-      config.namespaces[context] ??
-      "default";
+      defaultNamespaceOf(config, context);
     return { context, namespace };
   }
 
@@ -359,7 +396,7 @@ export function createPlugin(options: K8sPodsOptions = {}) {
           const interval = optionalInterval(args.interval_seconds);
           if (context !== undefined) {
             const config = await readConfig(kubectl).catch((error: unknown) => {
-              throw toPluginError(error, null, null);
+              throw toPluginError(error, null, null, settings);
             });
             if (!config.contexts.includes(context)) {
               throw invalid(`context "${context}" is not in your kubeconfig`);
@@ -420,7 +457,9 @@ export function createPlugin(options: K8sPodsOptions = {}) {
             return { payload: { pod, namespace, context, controller }, message };
           } catch (error) {
             const failure =
-              error instanceof PluginError ? error : toPluginError(error, context, namespace);
+              error instanceof PluginError
+                ? error
+                : toPluginError(error, context, namespace, settings);
             await publish({
               lastAction: action(
                 pod,
@@ -526,7 +565,7 @@ export function createPlugin(options: K8sPodsOptions = {}) {
                   : `Last ${lines.length} line${lines.length === 1 ? "" : "s"} from the ${run}${container} in ${pod}`,
             };
           } catch (error) {
-            const failure = toPluginError(error, context, namespace);
+            const failure = toPluginError(error, context, namespace, settings);
             if (!forAgent && session === logSession) {
               await publishLogs({
                 loading: false,
@@ -555,8 +594,15 @@ export function createPlugin(options: K8sPodsOptions = {}) {
     async onReady(ready) {
       host = ready;
       host.log.info("listing pods with kubectl on this device; credentials stay local");
+      await readSettings(ready);
+      started = true;
       startTimer();
       await refresh();
+    },
+    // The user saved the settings, or another account signed in: the whole set.
+    async onSettingsChanged(values) {
+      settingsReceived++;
+      await applySettings(values);
     },
     onShutdown() {
       stopTimer();
@@ -564,6 +610,57 @@ export function createPlugin(options: K8sPodsOptions = {}) {
       host = null;
     },
   });
+
+  /** Read the settings at start; without them, the defaults stay. */
+  async function readSettings(ready: Host): Promise<void> {
+    const received = settingsReceived;
+    try {
+      const values = await ready.settings.get();
+      if (received === settingsReceived) await applySettings(values);
+    } catch (error) {
+      // A host from before settings has none to give.
+      if (error instanceof HostRequestError && error.code === ErrorCode.METHOD_NOT_FOUND) return;
+      ready.log.warn(
+        `using the default settings, since they could not be read: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Use `values` in place of the settings held so far. Once the pods are listed,
+   * a changed default context or namespace replaces the panel's pick, a changed
+   * kubeconfig or kubectl lists again, and a changed interval restarts the timer.
+   */
+  async function applySettings(values: Readonly<Record<string, unknown>>): Promise<void> {
+    const { settings: next, ignored } = parseSettings(values);
+    if (ignored.length > 0) {
+      host?.log.warn(`settings left unset, since their values do not fit: ${ignored.join(", ")}`);
+    }
+    const before = settings;
+    settings = next;
+    if (!started) {
+      state = { ...state, intervalSeconds: next.intervalSeconds, logTailLines: next.logTailLines };
+      return;
+    }
+    const patch: { -readonly [K in keyof PanelState]?: PanelState[K] } = {};
+    if (next.intervalSeconds !== before.intervalSeconds) {
+      patch.intervalSeconds = next.intervalSeconds;
+    }
+    if (next.logTailLines !== before.logTailLines) patch.logTailLines = next.logTailLines;
+    const defaultsChanged =
+      next.defaultContext !== before.defaultContext ||
+      next.defaultNamespace !== before.defaultNamespace;
+    const kubectlChanged =
+      next.kubeconfig !== before.kubeconfig || next.kubectlPath !== before.kubectlPath;
+    if (defaultsChanged) {
+      patch.context = null;
+      patch.namespace = null;
+    }
+    if (kubectlChanged) namespaceCache.clear();
+    if (Object.keys(patch).length > 0) await publish(patch);
+    if (patch.intervalSeconds !== undefined) startTimer();
+    if (defaultsChanged || kubectlChanged) void refresh();
+  }
 
   /** Stream a followed log into the view, flushing new lines every `logFlushMs`. */
   function startFollow(session: number, args: readonly string[]): void {
@@ -585,7 +682,8 @@ export function createPlugin(options: K8sPodsOptions = {}) {
         stopFollow = () => {};
         if (session !== logSession) return;
         const ended = error
-          ? describe(error, state.logs?.context ?? null, state.logs?.namespace ?? null).message
+          ? describe(error, state.logs?.context ?? null, state.logs?.namespace ?? null, settings)
+              .message
           : "The container stopped writing logs: it exited or the pod is gone.";
         void publishLogs({
           lines: buffer.lines,
@@ -616,11 +714,12 @@ export function createPlugin(options: K8sPodsOptions = {}) {
   }
 }
 
-/** What the panel and the user see for a failed kubectl call. */
+/** What the panel and the user see for a failed kubectl call, run with `settings`. */
 export function describe(
   error: unknown,
   context: string | null,
   namespace: string | null,
+  settings: PluginSettings = DEFAULT_SETTINGS,
 ): PanelError {
   if (!(error instanceof KubeError)) {
     return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
@@ -630,11 +729,17 @@ export function describe(
   const message = ((): string => {
     switch (error.kind) {
       case "kubectl_missing":
-        return "kubectl was not found on this device. Install kubectl and restart RIM, so the plugin can find it on your PATH.";
+        return settings.kubectlPath !== null
+          ? "kubectl was not found at the kubectl path in the plugin's settings. Correct it there, or clear it to use the kubectl on your PATH."
+          : "kubectl was not found on this device. Install kubectl and restart RIM, so the plugin can find it on your PATH.";
       case "no_kubeconfig":
-        return "No kubeconfig found. The plugin reads the same file kubectl does: $KUBECONFIG, or ~/.kube/config.";
+        return settings.kubeconfig !== null
+          ? "The kubeconfig file in the plugin's settings could not be read or has no contexts. Correct it there, or clear it to use $KUBECONFIG or ~/.kube/config."
+          : "No kubeconfig found. The plugin reads the same file kubectl does: $KUBECONFIG, or ~/.kube/config.";
       case "context_missing":
-        return `The context ${ctx} is not in your kubeconfig. Pick another context.`;
+        return context !== null && context === settings.defaultContext
+          ? `The context ${ctx}, the default context in the plugin's settings, is not in your kubeconfig. Pick another context, or change the setting.`
+          : `The context ${ctx} is not in your kubeconfig. Pick another context.`;
       case "unreachable":
         return `Cannot reach the cluster of ${ctx}. Check your network or VPN, and that the cluster is running.`;
       case "unauthorized":
@@ -654,9 +759,10 @@ function toPluginError(
   error: unknown,
   context: string | null,
   namespace: string | null,
+  settings: PluginSettings,
 ): PluginError {
   if (error instanceof PluginError) return error;
-  const described = describe(error, context, namespace);
+  const described = describe(error, context, namespace, settings);
   return new PluginError(described.message, { data: { reason: described.kind } });
 }
 
