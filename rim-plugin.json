@@ -208,7 +208,7 @@
           "name": "tail_lines",
           "type": "integer",
           "required": false,
-          "description": "How many of the last lines to show, 1 to 5000. Defaults to the last count chosen, 100 at first."
+          "description": "How many of the last lines to show, 1 to 5000. Defaults to the last count chosen, at first the Log lines setting (100 unless changed)."
         },
         {
           "name": "previous",
@@ -311,5 +311,52 @@
       "slot": "main_area"
     }
   ],
-  "settings_schema": []
+  "settings_schema": [
+    {
+      "key": "kubeconfig",
+      "title": "Kubeconfig file",
+      "description": "The kubeconfig kubectl reads, passed to it as --kubeconfig. ~ stands for your home folder. Empty uses $KUBECONFIG, or ~/.kube/config.",
+      "value_type": "path",
+      "placeholder": "~/.kube/config"
+    },
+    {
+      "key": "kubectl_path",
+      "title": "kubectl path",
+      "description": "The kubectl program to run: a full path, or a name on your PATH. Empty uses $RIM_KUBECTL when set, else the kubectl on your PATH or in a usual install folder.",
+      "value_type": "path",
+      "placeholder": "/usr/local/bin/kubectl"
+    },
+    {
+      "key": "default_context",
+      "title": "Default context",
+      "description": "The kubeconfig context the Pods panel opens on, until you pick another. Empty uses the kubeconfig's current context.",
+      "value_type": "string",
+      "placeholder": "prod-eu"
+    },
+    {
+      "key": "default_namespace",
+      "title": "Default namespace",
+      "description": "The namespace the Pods panel shows in every context until you pick another. Empty uses the context's namespace from the kubeconfig, else default.",
+      "value_type": "string",
+      "placeholder": "default"
+    },
+    {
+      "key": "refresh_interval_seconds",
+      "title": "Refresh every (seconds)",
+      "description": "How often the Pods panel lists the pods again, 5 to 3600 seconds. Turn refreshing off in the panel.",
+      "value_type": "integer",
+      "default": 15,
+      "min": 5,
+      "max": 3600
+    },
+    {
+      "key": "log_tail_lines",
+      "title": "Log lines",
+      "description": "How many of a container's last lines a log view starts with, 1 to 5000, until you pick another count in the view.",
+      "value_type": "integer",
+      "default": 100,
+      "min": 1,
+      "max": 5000
+    }
+  ]
 }

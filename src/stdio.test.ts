@@ -27,11 +27,25 @@ const PRINCIPAL = {
 
 type Frame = Record<string, unknown>;
 
-function launch(pluginDir: string) {
+/** Bundle the plugin as a release does, into a fresh folder. */
+function bundle(): string {
+  const outDir = join(mkdtempSync(join(tmpdir(), "rim-k8s-")), "chat.rim.k8s-pods");
+  execFileSync(process.execPath, [bundlerPath(), "--entry", "src/main.ts", PLUGIN_DIR, outDir]);
+  return outDir;
+}
+
+/**
+ * Start the bundled plugin with the fake kubectl as `$RIM_KUBECTL`, or `kubectl`
+ * instead. A host with `settings` answers `rim.settings.get` with them.
+ */
+function launch(
+  pluginDir: string,
+  { kubectl = FAKE_KUBECTL, settings }: { kubectl?: string; settings?: Frame } = {},
+) {
   const manifest = JSON.parse(readFileSync(join(pluginDir, "rim-plugin.json"), "utf8"));
   const child = spawn(join(pluginDir, manifest.entrypoint), [], {
     cwd: pluginDir,
-    env: { ...process.env, RIM_KUBECTL: FAKE_KUBECTL },
+    env: { ...process.env, RIM_KUBECTL: kubectl },
     stdio: ["pipe", "pipe", "inherit"],
   });
   const decoder = new FrameDecoder();
@@ -42,8 +56,13 @@ function launch(pluginDir: string) {
       if (!decoded.ok) throw new Error(decoded.error);
       const frame = decoded.value as Frame;
       if (frame.method === "rim.log") continue;
+      if (frame.method === "rim.settings.get" && settings) {
+        send({ jsonrpc: "2.0", id: frame.id, result: { values: settings } });
+        continue;
+      }
       if (typeof frame.method === "string") {
-        // A host that did not grant ui.panel refuses the panel update.
+        // A host that did not grant ui.panel refuses the panel update, and the
+        // settings read too when it has none.
         send({ jsonrpc: "2.0", id: frame.id, error: { code: -32001, message: "not granted" } });
         continue;
       }
@@ -59,6 +78,20 @@ function launch(pluginDir: string) {
   return { manifest, send, ask, exited };
 }
 
+const HANDSHAKE: Frame = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "rim.handshake",
+  params: {
+    protocolVersion: 1,
+    supportedVersions: [1],
+    pluginId: "chat.rim.k8s-pods",
+    hostVersion: "0.1.0",
+    grantedCapabilities: [],
+    principal: PRINCIPAL,
+  },
+};
+
 function execute(id: number, commandId: string, args: Frame, confirmed: boolean): Frame {
   return {
     jsonrpc: "2.0",
@@ -70,8 +103,7 @@ function execute(id: number, commandId: string, args: Frame, confirmed: boolean)
 
 describe("Kubernetes Pods plugin, bundled", () => {
   it("ships its panel and speaks v1 over stdio", async () => {
-    const outDir = join(mkdtempSync(join(tmpdir(), "rim-k8s-")), "chat.rim.k8s-pods");
-    execFileSync(process.execPath, [bundlerPath(), "--entry", "src/main.ts", PLUGIN_DIR, outDir]);
+    const outDir = bundle();
     // The bundle carries what the plugin runs, not its sources, tests or fakes.
     expect(readdirSync(outDir, { recursive: true }).sort()).toEqual([
       "main.mjs",
@@ -84,19 +116,7 @@ describe("Kubernetes Pods plugin, bundled", () => {
 
     const plugin = launch(outDir);
     expect(plugin.manifest.entrypoint).toBe("main.mjs");
-    const handshake = await plugin.ask({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "rim.handshake",
-      params: {
-        protocolVersion: 1,
-        supportedVersions: [1],
-        pluginId: "chat.rim.k8s-pods",
-        hostVersion: "0.1.0",
-        grantedCapabilities: [],
-        principal: PRINCIPAL,
-      },
-    });
+    const handshake = await plugin.ask(HANDSHAKE);
     expect(handshake.result).toEqual({
       accepted: true,
       protocolVersion: 1,
@@ -109,6 +129,26 @@ describe("Kubernetes Pods plugin, bundled", () => {
     const refused = await plugin.ask(execute(3, "restart_pod", { pod: "web-7f9c-abcde" }, false));
     expect(refused.error).toMatchObject({ data: { reason: "confirmation_required" } });
 
+    plugin.send({ jsonrpc: "2.0", method: "rim.shutdown" });
+    expect(await plugin.exited).toBe(0);
+  }, 30_000);
+
+  it("runs the kubectl its settings name in place of $RIM_KUBECTL", async () => {
+    const outDir = bundle();
+    const missing = launch(outDir, { kubectl: join(outDir, "no-kubectl") });
+    await missing.ask(HANDSHAKE);
+    const notFound = await missing.ask(execute(2, "refresh", {}, false));
+    expect(notFound.error).toMatchObject({ data: { reason: "kubectl_missing" } });
+    missing.send({ jsonrpc: "2.0", method: "rim.shutdown" });
+    expect(await missing.exited).toBe(0);
+
+    const plugin = launch(outDir, {
+      kubectl: join(outDir, "no-kubectl"),
+      settings: { kubectl_path: FAKE_KUBECTL },
+    });
+    await plugin.ask(HANDSHAKE);
+    const refreshed = await plugin.ask(execute(2, "refresh", {}, false));
+    expect(refreshed.result).toMatchObject({ message: "3 pods in shop (kind-dev)" });
     plugin.send({ jsonrpc: "2.0", method: "rim.shutdown" });
     expect(await plugin.exited).toBe(0);
   }, 30_000);

@@ -110,7 +110,7 @@ export function classify(stderr: string): KubeError {
     if (/context .*(does not exist|not found)|no context exists/i.test(text))
       return "context_missing";
     if (
-      /no configuration has been provided|current-context is not set|invalid configuration/i.test(
+      /no configuration has been provided|current-context is not set|invalid configuration|error loading config file|stat .*: no such file or directory/i.test(
         text,
       )
     )
