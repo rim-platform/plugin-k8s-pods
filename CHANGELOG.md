@@ -19,6 +19,8 @@ the version in `rim-plugin.json` and in `package.json`.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-20
+
 ### Added
 
 - **Pods: Show logs** (`pod_logs`) and a **Logs** button on each pod (key <kbd>l</kbd>): the last
@@ -61,5 +63,6 @@ the version in `rim-plugin.json` and in `package.json`.
   SDK inside, and `panels/`), so the desktop installs it from its git URL with nothing to
   `npm install`; each release attaches a `.rimbundle` for Install from link.
 
-[Unreleased]: https://github.com/rim-platform/plugin-k8s-pods/compare/v0.0.1...master
+[Unreleased]: https://github.com/rim-platform/plugin-k8s-pods/compare/v0.0.2...master
+[0.0.2]: https://github.com/rim-platform/plugin-k8s-pods/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/rim-platform/plugin-k8s-pods/releases/tag/v0.0.1
