@@ -13,7 +13,7 @@ The plugin runs `kubectl` on your machine with your own kubeconfig. It never rea
 credentials itself: it only sees what `kubectl` prints (pod lists, logs, the names of your
 contexts) and its error text. Nothing from your cluster or your kubeconfig is sent to the RIM
 server or to the AI model provider. The AI agent sees a pod listing only when you let it call the
-plugin's commands (Settings → Plugins → AI permissions), and pod logs only when you allow
+plugin's commands (Settings → Plugin AI), and pod logs only when you allow
 **Pods: Show logs** there as well: logs can hold secrets and personal data, so it starts off.
 
 ## What it asks for
@@ -62,8 +62,9 @@ account may not list namespaces, type the namespace instead.
 
 ## Settings
 
-Open them from the side rail's **Plugins** menu (the **Kubernetes Pods** "Settings" row, while
-the plugin is on) or with **Settings** on its row in Settings → Plugins. Every one is optional.
+Open them with **Settings** on the plugin's row in Settings → Plugins or, while the plugin is
+on, with **Plugin settings** in the **Pods** panel's header or **Plugin settings: Kubernetes
+Pods** in the command palette. Every one is optional.
 They are kept on this device for your account, never synced or sent to the RIM server. The panel
 and the AI agent see the context and namespace in use, but never the paths from these settings:
 where kubectl's error text names one, the plugin shows `<kubeconfig setting>` or
@@ -85,8 +86,8 @@ and a new kubeconfig or kubectl lists the pods again. A value that does not fit,
 by an older version of the plugin, counts as unset. If RIM cannot read the settings, the plugin
 uses the defaults above. kubectl gets the paths as arguments of its own, never through a shell.
 
-Adding the settings changed the plugin's manifest, so after updating to the version with them RIM
-asks you once more, in Settings → Plugin AI, to allow the AI agent to use the plugin's commands.
+Adding the settings changed the plugin's manifest, so after updating from 0.0.1 RIM asks you
+once more, in Settings → Plugin AI, to allow the AI agent to use the plugin's commands.
 
 ## Install
 
@@ -96,9 +97,10 @@ It needs the RIM desktop app, Node.js 22 or newer and `kubectl` on this device. 
 plugin's settings, or `RIM_KUBECTL` to its path before starting RIM. `kubectl` reads the
 **Kubeconfig file** setting when you set it, else `KUBECONFIG` and `~/.kube/config` as usual.
 
-Each way ends the same: RIM shows what the plugin does and asks for its permissions; allow
-them, turn the plugin on, and open **Pods** from the side rail or run **Pods: Refresh** from
-the command palette.
+Each way ends the same: RIM shows what the plugin does and asks for its permissions;
+**Approve and turn on** grants the ones you leave ticked and starts the plugin. Then open the
+**Pods** panel with **Kubernetes Pods** in the side rail's **Plugins** menu, or with **Open
+Pods** in the command palette.
 
 - **Install from git URL**: Settings → Plugins → Install from git URL, with
   `https://github.com/rim-platform/plugin-k8s-pods.git`. The desktop runs the committed
@@ -109,8 +111,7 @@ the command palette.
   `https://github.com/rim-platform/plugin-k8s-pods/releases/download/v<version>/chat.rim.k8s-pods-<version>.rimbundle#sha256=<hash>`.
   The app checks that the bundle hashes to the value after `#sha256=` before it installs
   anything. The web app refuses a plugin that runs as a local program, so install it on the
-  desktop. Install from link with a GitHub release asset works on the desktop once it fetches
-  links natively (a rim-ui issue).
+  desktop, which fetches the link itself.
 - **Workspace registry**: when a workspace recommends or requires the plugin, the desktop's
   command palette offers it under "Workspace plugins" with its publisher's signature, and a
   required one is offered when the workspace opens. The app verifies the signed statement
