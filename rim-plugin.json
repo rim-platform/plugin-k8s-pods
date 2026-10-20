@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "plugin_id": "chat.rim.k8s-pods",
   "display_name": "Kubernetes Pods",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Lists the pods of a Kubernetes namespace with status, restarts and age, shows and follows a container's logs, and restarts a pod after you confirm. It runs kubectl on this device with your own kubeconfig: your cluster credentials never leave this device and are never sent to the RIM server or to the AI model provider. Pod logs reach the AI agent only if you allow its Pods: Show logs command in the plugin's AI access settings.",
   "author": "RIM team",
   "runtime_kind": "DesktopLocalProcess",

@@ -132,10 +132,9 @@ jobs:
           $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/$BUNDLE#sha256=$SHA256
           \`\`\`
 
-          The app fetches a link from its web view, and GitHub serves release assets without
-          CORS headers, so this link works on the desktop once it fetches links natively
-          (rim-ui issue #146); in the browser, install through a workspace registry or from a
-          host that sends CORS headers.
+          The desktop app fetches this link itself. GitHub serves release assets without CORS
+          headers, so the web app cannot fetch it: in the browser, install through a workspace
+          registry or from a host that sends CORS headers.
 
           **Install from git URL** (Settings → Plugins, on the desktop):
           \`$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git\` installs the built plugin on \`master\`.
