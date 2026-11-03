@@ -9,6 +9,15 @@ Everyone taking part follows the code of conduct in `CODE_OF_CONDUCT.md`. A secu
 vulnerability is never reported in a public issue or pull request: `SECURITY.md` says how to
 report it privately.
 
+## AI assistants and automated accounts
+
+AI assistants are welcome: say in the pull request which ones helped. Every pull request needs a
+person behind it who understands the change and answers the review; pull requests that accounts
+open automatically, with no person following up, are closed without review. Good first issues
+are kept for people new to RIM: say on the issue that you are taking it before you start. The full
+rule is in
+[rim-server's CONTRIBUTING.md](https://github.com/rim-platform/rim-server/blob/master/CONTRIBUTING.md#ai-assistants-and-automated-accounts).
+
 ## A pull request
 
 - Change the sources in `src/` and the panel in `panels/`, then run `npm run build` and commit
