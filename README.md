@@ -86,6 +86,10 @@ and a new kubeconfig or kubectl lists the pods again. A value that does not fit,
 by an older version of the plugin, counts as unset. If RIM cannot read the settings, the plugin
 uses the defaults above. kubectl gets the paths as arguments of its own, never through a shell.
 
+Refresh, Filter and Show logs are marked `read_only` in the manifest: they change nothing but
+this plugin's panel, so an AI agent outside RIM that you approved for them runs them without a
+dialog each time. Restart pod is never run by an agent.
+
 Adding the settings changed the plugin's manifest, so after updating from 0.0.1 RIM asks you
 once more, in Settings → Plugin AI, to allow the AI agent to use the plugin's commands.
 
