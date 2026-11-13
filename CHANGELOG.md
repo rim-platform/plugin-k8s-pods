@@ -19,6 +19,14 @@ the version in `rim-plugin.json` and in `package.json`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Pods: Refresh**, **Pods: Filter** and **Pods: Show logs** are marked `read_only`: they change
+  nothing but this plugin's own panel, so an AI agent running outside RIM may run them once you
+  approve them, without asking each time. **Pods: Restart pod** stays a suggestion only. The
+  manifest changed, so you approve the plugin's commands for the built-in AI agent again, in
+  Settings → Plugin AI.
+
 ## [0.0.2] - 2026-10-20
 
 ### Added
